@@ -42,7 +42,7 @@ iPhone / iPad / Mac 的 Apple 提醒事项
 
 ### 3.1 浏览器刷入固件
 
-1. 在电脑上使用 Chrome 或 Edge 打开 NOTE4 中文刷机页：`https://eink-reminders-note4-flasher.coldcolo.chatgpt.site/`。
+1. 在电脑上使用 Chrome 或 Edge 打开 NOTE4 中文刷机页：`https://wegooo-cell.github.io/EInkReminders/`。
 2. 用能够传输数据的 USB 线连接 NOTE4。
 3. 点击“连接并刷入”。
 4. 在浏览器弹出的串口列表中选择 NOTE4 对应的 USB 串口。

@@ -1,0 +1,37 @@
+name: 发布 NOTE4 浏览器刷机页
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web-flasher-note4/dist/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 读取仓库
+        uses: actions/checkout@v4
+      - name: 配置 GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: 打包刷机网页
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-flasher-note4/dist
+      - name: 发布
+        id: deployment
+        uses: actions/deploy-pages@v4

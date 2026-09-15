@@ -4,6 +4,8 @@
 它以 Mac 为桥梁，与 Apple 提醒事项、Mac 和 iPhone 双向联动。
 刷机页必须运行在 HTTPS 或 `localhost` 安全上下文中。
 
+公开刷机地址：<https://wegooo-cell.github.io/EInkReminders/>
+
 ## 本地预览
 
 ```bash

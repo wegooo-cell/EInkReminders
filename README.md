@@ -20,7 +20,7 @@ Apple 提醒事项并经 iCloud 同步到其他 Apple 设备。
 
 ## 立即使用
 
-- [打开 NOTE4 中文浏览器刷机页](https://eink-reminders-note4-flasher.coldcolo.chatgpt.site/)
+- [打开 NOTE4 中文浏览器刷机页](https://wegooo-cell.github.io/EInkReminders/)
 - [查看完整中文说明书](docs/user-manual.md)
 - [查看 v1.0.0 发布说明](RELEASE_NOTES_v1.0.0.md)
 
