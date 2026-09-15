@@ -1,6 +1,6 @@
 # 局域网协议 v2
 
-Mac 主动访问 ESP32，避免 macOS 防火墙入站配置。所有路径位于设备的 80 端口。
+Mac 主动访问 ZECTRIX NOTE4，避免 macOS 防火墙入站配置。所有路径位于设备的 80 端口。
 
 ## `GET /api/status`
 
@@ -12,7 +12,7 @@ Mac 主动访问 ESP32，避免 macOS 防火墙入站配置。所有路径位于
 
 ## `POST /api/snapshot`
 
-发送当前事项元数据。ESP32 使用第一条未完成事项作为初始 BOOT 选中目标。
+发送当前事项元数据。NOTE4 使用第一条未完成事项作为初始选中目标。
 
 ```json
 {
@@ -27,8 +27,8 @@ Mac 主动访问 ESP32，避免 macOS 防火墙入站配置。所有路径位于
 
 ## `POST /api/display?index=<n>&state=<normal|idle|confirm>`
 
-`Content-Type: application/octet-stream`，请求体必须恰好为 38880 字节
-（648 × 480 ÷ 8）。每行 81 字节，MSB 为左侧像素，`1` 表示黑，`0` 表示白。
+`Content-Type: application/octet-stream`，请求体必须恰好为 15,000 字节
+（400 × 300 ÷ 8）。每行 50 字节，MSB 为左侧像素，`1` 表示白，`0` 表示黑。
 设备只缓存当前选择画面、无选择画面和确认预览三幅图。按键改变选择后，`displayRequested=true`，Mac 根据 `selectedIndex` 按需生成并发送新画面。`confirm` 画面用于按下 OK 后立即显示完成状态，不再预先上传所有完成组合。
 
 ## `GET /api/operations?after=<sequence>`

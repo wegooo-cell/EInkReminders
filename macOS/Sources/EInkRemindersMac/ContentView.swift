@@ -125,12 +125,7 @@ struct ContentView: View {
 
             Spacer()
 
-            Text(
-                model.displayWidth == ZectrixDisplayRenderer.width &&
-                model.displayHeight == ZectrixDisplayRenderer.height
-                    ? "NOTE4：上/下选择 · OK 确认 · 长按上键设置"
-                    : "BOOT：单击下一项 · 双击确认"
-            )
+            Text("NOTE4：上/下选择 · OK 确认 · 长按上键设置")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -184,13 +179,9 @@ struct EInkDisplayViewport: View {
     let displayHeight: Int
 
     private var preview: CGImage? {
-        if displayWidth == ZectrixDisplayRenderer.width,
-           displayHeight == ZectrixDisplayRenderer.height {
-            return try? ZectrixDisplayRenderer.previewImage(
-                reminders, view: view, emptyState: emptyState
-            )
-        }
-        return try? DisplayRenderer.previewImage(reminders)
+        try? ZectrixDisplayRenderer.previewImage(
+            reminders, view: view, emptyState: emptyState
+        )
     }
 
     private var aspectRatio: CGFloat {

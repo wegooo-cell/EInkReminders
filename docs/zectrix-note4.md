@@ -51,17 +51,15 @@ iCloud 随后同步到 iPhone/iPad；再下一次同步刷新时移除完成项�
 提醒事项。“今天”包含逾期、当天和无日期待办；“计划”包含所有有日期的未完成事项；
 “全部”包含全部未完成事项；“完成”显示已完成事项且 OK 不会再次修改它们。
 
-## 通信兼容性
+## 通信接口
 
-NOTE4 沿用 `/api/status`、`/api/snapshot`、`/api/display`、`/api/operations` 和
-`/api/operations/ack`。Mac 端通过
-`/api/status` 自动识别屏幕：
+NOTE4 使用 `/api/status`、`/api/snapshot`、`/api/display`、`/api/operations` 和
+`/api/operations/ack`。Mac 端通过 `/api/status` 校验设备为 400 × 300 的 NOTE4 黑白版。
 
 首次配网时，设备使用 AP+STA 模式保持 `192.168.4.1` 热点在线，
 通过 DHCP 门户提示、通配 DNS 和 HTTP 跳转帮助 iPhone 自动打开中文页面。
 `GET /api/wifi/scan` 提供去重并按信号强度排序的附近 Wi-Fi 列表。
 
-- 微雪 5.83 英寸：648 × 480，1 表示黑色，38,880 字节。
-- ZECTRIX NOTE4：400 × 300，1 表示白色，15,000 字节。
+NOTE4 画面为 400 × 300、每帧 15,000 字节，`1` 表示白色。
 
 HTTP 接口没有公网身份验证，只应部署在可信局域网中。

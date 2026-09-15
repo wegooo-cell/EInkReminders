@@ -36,8 +36,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var emptyState: ReminderEmptyState = .noItems
     @Published private(set) var statusText = "尚未同步"
     @Published private(set) var isSyncing = false
-    @Published private(set) var displayWidth = DisplayRenderer.width
-    @Published private(set) var displayHeight = DisplayRenderer.height
+    @Published private(set) var displayWidth = ZectrixDisplayRenderer.width
+    @Published private(set) var displayHeight = ZectrixDisplayRenderer.height
     @Published var automaticSync: Bool {
         didSet {
             defaults.set(automaticSync, forKey: Keys.automaticSync)
@@ -230,12 +230,13 @@ final class AppModel: ObservableObject {
             }
             displayWidth = deviceStatus.width
             displayHeight = deviceStatus.height
-            let usesZectrixFrame = deviceStatus.width == ZectrixDisplayRenderer.width &&
-                deviceStatus.height == ZectrixDisplayRenderer.height
-            activeView = usesZectrixFrame ? (deviceStatus.view ?? .today) : .today
-            let renderProfile = usesZectrixFrame
-                ? "zectrix-note4-\(deviceStatus.firmwareVersion ?? "unknown")-\(activeView.rawValue)"
-                : "waveshare-583"
+            guard deviceStatus.width == ZectrixDisplayRenderer.width,
+                  deviceStatus.height == ZectrixDisplayRenderer.height else {
+                statusText = "同步失败：当前版本仅支持 ZECTRIX NOTE4 黑白版（400 × 300）"
+                return
+            }
+            activeView = deviceStatus.view ?? .today
+            let renderProfile = "zectrix-note4-\(deviceStatus.firmwareVersion ?? "unknown")-\(activeView.rawValue)"
             // The device's durable queue is the source of truth. Always read
             // every unacknowledged operation: firmware reinstall/reset can
             // restart its sequence at 1 while the device MAC stays unchanged.
@@ -243,7 +244,6 @@ final class AppModel: ObservableObject {
             // removed only by the ACK below.
             let operations = try await client.operations(after: 0)
             let sortedOperations = operations.sorted(by: { $0.sequence < $1.sequence })
-            let deviceCompletedIDs = Self.completedOnDeviceIDs(from: sortedOperations)
             for operation in sortedOperations {
                 try reminderStore.apply(operation, calendarIdentifier: selectedCalendarId)
             }
@@ -251,81 +251,64 @@ final class AppModel: ObservableObject {
             let viewSnapshot = try await reminderStore.fetchView(
                 activeView,
                 calendarIdentifier: selectedCalendarId,
-                includeAlertCandidates: usesZectrixFrame
+                includeAlertCandidates: true
             )
             activeViewTotalCount = viewSnapshot.totalCount
             emptyState = viewSnapshot.emptyState
-            let completedOnDevice = reminderStore.completedItems(withSyncIds: deviceCompletedIDs)
-            reminders = activeView == .completed
-                ? viewSnapshot.items
-                : Self.remindersForDisplay(
-                    incomplete: viewSnapshot.items,
-                    completedOnDevice: completedOnDevice,
-                    usesZectrixFrame: usesZectrixFrame
-                )
+            reminders = viewSnapshot.items
             let needsRefresh = lastRenderedItems != reminders ||
                 lastRenderProfile != renderProfile ||
-                (usesZectrixFrame && lastRenderedEmptyState != emptyState) ||
-                Self.requiresFrameRebuild(deviceRevision: deviceStatus.revision,
-                                          forZectrix: usesZectrixFrame)
+                lastRenderedEmptyState != emptyState ||
+                Self.requiresFrameRebuild(deviceRevision: deviceStatus.revision)
             let revision = UInt64(Date().timeIntervalSince1970 * 1_000)
             let now = Date()
-            let alertItems = usesZectrixFrame ? Self.pendingAlerts(
-                from: viewSnapshot.alertCandidates, now: now
-            ) : []
+            let alertItems = Self.pendingAlerts(from: viewSnapshot.alertCandidates, now: now)
             let alertSignatures = alertItems.map { "\($0.syncId)|\(Int64(($0.dueAt?.timeIntervalSince1970 ?? 0) * 1_000))|\($0.title)" }
-            let alertsChanged = usesZectrixFrame && alertSignatures != lastAlertSignatures
+            let alertsChanged = alertSignatures != lastAlertSignatures
             let shouldSendSnapshot = needsRefresh || alertsChanged || deviceStatus.syncRequested == true || !operations.isEmpty
             if shouldSendSnapshot {
-                let alerts: [DeviceAlert]? = usesZectrixFrame ? try alertItems.map { item in
+                let alerts: [DeviceAlert]? = try alertItems.map { item in
                     DeviceAlert(
                         syncId: item.syncId, appleId: item.appleId,
                         dueAtEpochMs: Int64(item.dueAt!.timeIntervalSince1970 * 1_000),
                         bitmap: try ZectrixDisplayRenderer.renderAlertPatch(title: item.title).base64EncodedString()
                     )
-                } : nil
+                }
                 try await client.send(snapshot: DeviceSnapshot(
                     revision: revision,
                     reminders: reminders,
                     viewCounts: nil,
-                    currentViewCount: usesZectrixFrame ? viewSnapshot.items.count : nil,
+                    currentViewCount: viewSnapshot.items.count,
                     replaceDisplay: needsRefresh,
                     sentAtEpochMs: Int64(Date().timeIntervalSince1970 * 1_000),
                     alerts: alerts
                 ))
-                if usesZectrixFrame {
-                    cachedZectrixItems = reminders
-                    cachedZectrixView = activeView
-                    cachedZectrixRevision = revision
-                    lastAlertSignatures = alertSignatures
-                }
+                cachedZectrixItems = reminders
+                cachedZectrixView = activeView
+                cachedZectrixRevision = revision
+                lastAlertSignatures = alertSignatures
             }
             if needsRefresh {
                 let selectableCount = activeView == .completed
                     ? reminders.count
                     : reminders.lazy.filter { !$0.completed }.count
-                if usesZectrixFrame {
-                    try await client.send(
-                        display: try renderDisplay(reminders, selectedIndex: nil, forZectrix: true),
-                        index: 0,
-                        state: .idle
+                try await client.send(
+                    display: try ZectrixDisplayRenderer.render(
+                        reminders,
+                        selectedIndex: nil,
+                        view: activeView,
+                        emptyState: emptyState
+                    ),
+                    index: 0,
+                    state: .idle
+                )
+                if selectableCount > 0 {
+                    try await sendZectrixInteractionFrames(
+                        client: client,
+                        items: reminders,
+                        selectedOriginalIndex: 0,
+                        queuedCompletionIDs: []
                     )
-                    if selectableCount > 0 {
-                        try await sendZectrixInteractionFrames(
-                            client: client,
-                            items: reminders,
-                            selectedOriginalIndex: 0,
-                            queuedCompletionIDs: []
-                        )
-                    }
-                } else {
-                    let pageCount = max(1, min(selectableCount, 5))
-                    for index in 0..<pageCount {
-                        try await client.send(
-                            display: try renderDisplay(reminders, selectedIndex: index, forZectrix: false),
-                            index: index
-                        )
-                    }
                 }
                 lastRenderedItems = reminders
                 lastRenderProfile = renderProfile
@@ -344,22 +327,6 @@ final class AppModel: ObservableObject {
         } catch {
             statusText = "同步失败：\(error.localizedDescription)"
         }
-    }
-
-    private func renderDisplay(
-        _ reminders: [ReminderItem],
-        selectedIndex: Int?,
-        forZectrix: Bool
-    ) throws -> Data {
-        if forZectrix {
-            return try ZectrixDisplayRenderer.render(
-                reminders,
-                selectedIndex: selectedIndex,
-                view: activeView,
-                emptyState: emptyState
-            )
-        }
-        return try DisplayRenderer.render(reminders, selectedIndex: selectedIndex ?? 0)
     }
 
     private func sendZectrixInteractionFrames(
@@ -436,22 +403,11 @@ final class AppModel: ObservableObject {
             .prefix(32).map { $0 }
     }
 
-    static func requiresFrameRebuild(deviceRevision: UInt64, forZectrix: Bool) -> Bool {
+    static func requiresFrameRebuild(deviceRevision: UInt64) -> Bool {
         // The NOTE4 marks its revision as zero after a local cache clear or
         // when its idle frame is missing. Re-upload the image even if EventKit
         // returns exactly the same reminders as last time.
-        forZectrix && deviceRevision == 0
-    }
-
-    static func remindersForDisplay(
-        incomplete: [ReminderItem],
-        completedOnDevice: [ReminderItem],
-        usesZectrixFrame: Bool
-    ) -> [ReminderItem] {
-        // NOTE4 has already shown the local strike-through during the five
-        // second confirmation window. Its next full refresh removes every
-        // confirmed row. Keep the legacy transient row on the 5.83-inch UI.
-        usesZectrixFrame ? incomplete : incomplete + completedOnDevice
+        deviceRevision == 0
     }
 
     static func itemsMarkingCompleted(
