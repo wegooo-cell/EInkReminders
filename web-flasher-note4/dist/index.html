@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f5f5f7" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="墨水屏提醒事项 · NOTE4 浏览器刷机" />
-    <meta property="og:description" content="把 ZECTRIX NOTE4 接入 Apple 提醒事项，与 Mac、iPhone 双向联动。" />
+    <meta property="og:description" content="让 ZECTRIX NOTE4 与 Apple 提醒事项、Mac 和 iPhone 双向联动。" />
     <meta property="og:url" content="https://wegooo-cell.github.io/EInkReminders/" />
     <meta property="og:image" content="https://wegooo-cell.github.io/EInkReminders/social-preview.png" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -31,19 +31,25 @@
           <img class="brand-icon" src="./project-icon.png" alt="" />
           <span>墨水屏提醒事项</span>
         </a>
-        <span class="version">v1.0 · ZECTRIX NOTE4 · 4.2″ 黑白屏</span>
+        <div class="nav-links">
+          <a href="#features">功能</a>
+          <a href="#previews">界面</a>
+          <a href="#install">安装</a>
+          <a href="https://github.com/wegooo-cell/EInkReminders" target="_blank" rel="noopener">GitHub</a>
+        </div>
+        <span class="version">v1.0 · NOTE4 黑白版</span>
       </nav>
 
       <section class="hero" id="top">
         <div class="hero-copy">
-          <p class="eyebrow">v1.0 · 浏览器安装器</p>
-          <h1>三步，把提醒事项<br />装进墨水屏。</h1>
+          <p class="eyebrow">ZECTRIX NOTE4 · Apple 提醒事项</p>
+          <h1>把今天的事，<br />安静地放在桌面。</h1>
           <p class="lede">
-            不用安装开发工具。让 NOTE4 完全联动 Apple 生态：iPhone 与 Mac 上的提醒事项，
-            都能通过 Mac 桥接到墨水屏，并支持双向完成。
+            “墨水屏提醒事项”用 Mac 作为本地桥梁，将 iPhone、Mac 与 NOTE4
+            连接起来。手机上新增，墨水屏立即显示；墨水屏上完成，也会写回 Apple 提醒事项。
           </p>
 
-          <div class="installer-card">
+          <div class="installer-card" id="install">
             <div class="compatibility" id="compatibility" role="status" aria-live="polite">
               <span class="status-dot" aria-hidden="true"></span>
               <span id="compatibility-text">正在检查浏览器…</span>
@@ -51,7 +57,7 @@
 
             <esp-web-install-button manifest="./firmware/manifest.json?v=1.0.0">
               <button class="install-button" slot="activate" type="button">
-                <span>连接并刷入</span>
+                <span>连接 NOTE4 并刷入</span>
                 <span aria-hidden="true">→</span>
               </button>
               <p class="browser-message" slot="unsupported">
@@ -62,7 +68,7 @@
               </p>
             </esp-web-install-button>
 
-            <p class="microcopy">仅适用于黑白版 NOTE4，不适用于 NOTE4C。刷写会覆盖设备原厂固件。</p>
+            <p class="microcopy">仅适用于 4.2 英寸黑白版 NOTE4，不适用于 NOTE4C。刷写会覆盖原厂固件。</p>
           </div>
         </div>
 
@@ -71,7 +77,7 @@
             <div class="screen">
               <header class="screen-header">
                 <strong>今天</strong>
-                <span>9月9日&nbsp; 周三</span>
+                <span>9月15日&nbsp; 周二</span>
               </header>
               <div class="reminder selected">
                 <span class="circle"></span><span>整理今日计划</span><time>今天</time>
@@ -84,50 +90,184 @@
               <div class="reminder">
                 <span class="circle"></span><span>剪辑产品视频</span><time>14:00</time>
               </div>
-              <div class="reminder">
-                <span class="circle"></span><span>准备咖啡</span><time>15:00</time>
-              </div>
               <div class="period-label">今晚</div>
               <div class="reminder">
                 <span class="circle"></span><span>晚间散步</span><time>19:30</time>
               </div>
-              <footer class="screen-footer"><span>上/下选择 · OK 确认 · 长按上键设置</span><span>5 项待办</span></footer>
+              <footer class="screen-footer">
+                <span>上/下选择 · OK 确认</span><span>4 项待办</span>
+              </footer>
             </div>
             <span class="usb-port" aria-hidden="true"></span>
           </div>
         </div>
       </section>
 
+      <section class="ecosystem" aria-labelledby="ecosystem-title">
+        <div class="section-heading centered">
+          <p class="eyebrow">完全联动 Apple 生态</p>
+          <h2 id="ecosystem-title">不是另一套待办，而是同一份提醒事项。</h2>
+          <p>
+            NOTE4 不保存你的 Apple ID，也不直接登录 iCloud。Mac App 使用系统 EventKit
+            读取你授权的列表，再通过家庭局域网与墨水屏同步。
+          </p>
+        </div>
+        <div class="sync-flow" aria-label="提醒事项同步流程">
+          <article>
+            <span class="flow-icon">iPhone</span>
+            <h3>随手新增</h3>
+            <p>在 iPhone 或 Mac 的原生“提醒事项”里继续使用熟悉的日期、时间和列表。</p>
+          </article>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+          <article>
+            <span class="flow-icon">Mac</span>
+            <h3>本地桥接</h3>
+            <p>Mac 检测到 EventKit 变化后立即同步，定时同步作为网络断线补偿。</p>
+          </article>
+          <span class="flow-arrow" aria-hidden="true">⇄</span>
+          <article>
+            <span class="flow-icon">NOTE4</span>
+            <h3>查看与完成</h3>
+            <p>上、下键选择，按 OK 完成；操作写回 Mac 后，经 iCloud 到达 iPhone。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="feature-section" id="features" aria-labelledby="features-title">
+        <div class="section-heading">
+          <p class="eyebrow">主要功能</p>
+          <h2 id="features-title">专门为一块安静的黑白屏设计。</h2>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card feature-large">
+            <span class="feature-kicker">四种视图</span>
+            <h3>今天、计划、全部、完成</h3>
+            <p>逻辑跟随 Apple 提醒事项。今天按上午、下午、今晚分段；计划保留未来日期；全部不设项目上限；完成视图每页显示六项。</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-kicker">双向完成</span>
+            <h3>按下 OK，Mac 与 iPhone 一起更新</h3>
+            <p>设备立即用实心圆和删除线反馈，随后上传本地操作，约 5 秒刷新并移除已完成事项。</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-kicker">到点提醒</span>
+            <h3>完成，或延后 5 分钟</h3>
+            <p>事项到达指定时间后显示紧凑提醒卡片，并播放提示音。上、下键选择，OK 执行。</p>
+            <div class="alert-demo" aria-label="到点提醒界面预览">
+              <span class="eyes">◉ ◉</span>
+              <span><strong>到点提醒</strong><small>提交项目方案</small></span>
+              <span class="alert-action">×<small>5分钟</small></span>
+              <span class="alert-action">✓<small>完成</small></span>
+            </div>
+          </article>
+          <article class="feature-card">
+            <span class="feature-kicker">清晰与省电</span>
+            <h3>原生 400 × 300 黑白渲染</h3>
+            <p>文字在 Mac 端进行高分辨率抗锯齿后转换为 1-bit。选择移动使用局部刷新，累计后自动全刷清理残影。</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-kicker">离线可靠</span>
+            <h3>断网时也不会丢失完成操作</h3>
+            <p>NOTE4 先将操作保存到 Flash，Mac 成功写入 Apple 提醒事项并回执后，设备才清理队列。</p>
+          </article>
+          <article class="feature-card">
+            <span class="feature-kicker">中文配网</span>
+            <h3>iPhone 扫码加入设备热点</h3>
+            <p>首次启动显示 Wi-Fi 二维码。扫码后从附近网络列表选择家庭 Wi-Fi，无需手动输入网络名称。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="preview-section" id="previews" aria-labelledby="previews-title">
+        <div class="section-heading centered">
+          <p class="eyebrow">真实渲染预览</p>
+          <h2 id="previews-title">网页看到的，就是 NOTE4 收到的 1-bit 画面。</h2>
+          <p>以下图片直接由当前 Mac 渲染器生成，分辨率均为 NOTE4 原生 400 × 300。</p>
+        </div>
+        <div class="preview-grid">
+          <figure class="preview-card preview-wide">
+            <div class="preview-device"><img src="./previews/preview-today.png" alt="NOTE4 今天视图，按上午下午今晚分段" loading="lazy" /></div>
+            <figcaption><strong>今天</strong><span>无日期事项默认属于今天；有具体时间时按时段分组。</span></figcaption>
+          </figure>
+          <figure class="preview-card">
+            <div class="preview-device"><img src="./previews/preview-scheduled.png" alt="NOTE4 计划视图，显示未来日期事项" loading="lazy" /></div>
+            <figcaption><strong>计划</strong><span>显示所有设置了日期的未完成事项，明天和未来日期不会混入今天。</span></figcaption>
+          </figure>
+          <figure class="preview-card">
+            <div class="preview-device"><img src="./previews/preview-completed.png" alt="NOTE4 完成视图" loading="lazy" /></div>
+            <figcaption><strong>完成</strong><span>集中浏览已完成项目，圆圈内使用实心状态标记。</span></figcaption>
+          </figure>
+          <figure class="preview-card preview-wide">
+            <div class="preview-device"><img src="./previews/preview-view-picker.png" alt="NOTE4 四视图选择页面" loading="lazy" /></div>
+            <figcaption><strong>切换视图</strong><span>长按上键进入设置，选择今天、计划、全部或完成。</span></figcaption>
+          </figure>
+        </div>
+      </section>
+
       <section class="steps" aria-labelledby="steps-title">
         <div class="section-heading">
-          <p class="eyebrow">开始前</p>
-          <h2 id="steps-title">准备好这三件事</h2>
+          <p class="eyebrow">浏览器刷机</p>
+          <h2 id="steps-title">准备好这三件事。</h2>
         </div>
         <ol class="step-grid">
           <li>
             <span class="step-number">1</span>
-            <div><h3>使用电脑</h3><p>请用 Chrome 或 Edge 打开。iPhone、iPad 和 Safari 暂不支持网页串口。</p></div>
+            <div><h3>使用电脑浏览器</h3><p>请使用最新版 Chrome 或 Edge。iPhone、iPad 和 Safari 不支持网页 USB 串口。</p></div>
           </li>
           <li>
             <span class="step-number">2</span>
-            <div><h3>连接数据线</h3><p>使用可传输数据的 USB 线，并关闭占用串口的监视器或开发工具。</p></div>
+            <div><h3>连接数据线</h3><p>使用可以传输数据的 USB 线，并关闭串口监视器或其他可能占用 NOTE4 的程序。</p></div>
           </li>
           <li>
             <span class="step-number">3</span>
-            <div><h3>进入下载模式</h3><p>先尝试直接连接。若未出现串口，拔下 USB，按住 OK 键重新插入，网页识别设备后再松开。</p></div>
+            <div><h3>选择串口并安装</h3><p>点击上方“连接 NOTE4 并刷入”，选择设备串口。无法识别时，按住 OK 键重新插入 USB 后再试。</p></div>
           </li>
         </ol>
+        <div class="install-notes">
+          <article><strong>安装前</strong><p>确认设备是 ZECTRIX NOTE4 黑白版，不是 NOTE4C。刷机会覆盖设备原厂固件。</p></article>
+          <article><strong>安装中</strong><p>不要关闭页面或拔掉 USB。等待写入与校验全部完成，再让设备重新启动。</p></article>
+          <article><strong>安装后</strong><p>NOTE4 显示二维码后，用 iPhone 相机扫码加入热点，并访问 <code>192.168.4.1</code> 完成配网。</p></article>
+        </div>
       </section>
 
       <section class="after-install" aria-labelledby="after-title">
         <div>
-          <p class="eyebrow">安装完成后</p>
-          <h2 id="after-title">打开 iPhone 相机，扫描 NOTE4 屏幕。</h2>
+          <p class="eyebrow">完成双向同步</p>
+          <h2 id="after-title">安装 Mac App，选择你的 Apple 提醒事项列表。</h2>
         </div>
-        <div class="after-copy"><p>
-          刷机重启后，NOTE4 会显示配网二维码。用 iPhone 相机扫描并加入 <code>EInk-Note4-XXXX</code> 热点，中文配网页面会自动打开；如果没有弹出，请访问 <code>192.168.4.1</code>。
-        </p><p><a class="shortcut-link" href="https://www.icloud.com/shortcuts/9e1448851dcd4903a9839d11b73126bf" target="_blank" rel="noopener">在 iPhone 上添加墨水屏提醒事项快捷指令 →</a></p><small>完整双向联动需配合“墨水屏提醒事项”Mac App v1.0 使用。连接家庭网络后，可在手机浏览器打开 NOTE4 的局域网地址，切换视图、同步、刷新和管理网络。NFC 自动化需在每台 iPhone 上扫描一次自己的 NOTE4。</small></div>
+        <div class="after-copy">
+          <p>
+            Mac 与 NOTE4 连接同一个家庭网络后，在应用中填写设备 IP、授权“提醒事项”，
+            再选择要显示的列表。iPhone 的变化经 iCloud 到达 Mac 后会立即推送到墨水屏。
+          </p>
+          <div class="button-row">
+            <a class="download-button" href="https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.0/EInkReminders-macOS-v1.0.0.zip">下载 Mac App</a>
+            <a class="text-button" href="https://github.com/wegooo-cell/EInkReminders/blob/main/docs/user-manual.md" target="_blank" rel="noopener">查看完整说明书 →</a>
+          </div>
+          <p class="shortcut-row">
+            <a class="shortcut-link" href="https://www.icloud.com/shortcuts/9e1448851dcd4903a9839d11b73126bf" target="_blank" rel="noopener">在 iPhone 添加快捷指令 →</a>
+          </p>
+          <small>Mac 是本地桥梁，必须保持应用运行。设备不保存 Apple ID，也不会直接访问 iCloud。</small>
+        </div>
       </section>
+
+      <section class="faq" aria-labelledby="faq-title">
+        <div class="section-heading">
+          <p class="eyebrow">常见问题</p>
+          <h2 id="faq-title">安装与同步说明。</h2>
+        </div>
+        <div class="faq-grid">
+          <article><h3>为什么 iPhone 不能直接刷机？</h3><p>网页刷机依赖 Web Serial。当前请使用电脑端 Chrome 或 Edge，iPhone 负责扫码配网。</p></article>
+          <article><h3>NOTE4 能直接登录 iCloud 吗？</h3><p>不能。Mac App 通过 Apple 官方 EventKit 权限访问提醒事项，再在局域网内同步。</p></article>
+          <article><h3>换了 Wi-Fi 怎么办？</h3><p>长按上键进入设置，优先选择“重连 Wi-Fi”；需要更换网络时选择“重新配网”。</p></article>
+          <article><h3>同步失败先检查什么？</h3><p>确认 Mac 与 NOTE4 在同一网络，并在浏览器访问 <code>http://设备IP/api/status</code> 检查连接。</p></article>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <span>墨水屏提醒事项 · ZECTRIX NOTE4 黑白版</span>
+        <a href="https://github.com/wegooo-cell/EInkReminders/releases/tag/v1.0.0" target="_blank" rel="noopener">v1.0.0 Release</a>
+      </footer>
     </main>
   </body>
 </html>

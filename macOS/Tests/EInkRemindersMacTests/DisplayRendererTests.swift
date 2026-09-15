@@ -1,3 +1,4 @@
+import AppKit
 import EventKit
 import XCTest
 @testable import EInkRemindersMac
@@ -299,5 +300,79 @@ final class DisplayRendererTests: XCTestCase {
             AutomaticSyncInterval.allCases.map(\.title),
             ["30 秒", "1 分钟", "10 分钟", "30 分钟", "1 小时"]
         )
+    }
+
+    func testExportWebsitePreviewsWhenRequested() throws {
+        guard let directory = ProcessInfo.processInfo.environment["EINK_NOTE4_WEB_PREVIEW_DIR"] else {
+            return
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let generatedAt = calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 15, hour: 9
+        ))!
+        func item(
+            _ id: String,
+            _ title: String,
+            day: Int?,
+            hour: Int?,
+            completed: Bool = false
+        ) -> ReminderItem {
+            ReminderItem(
+                syncId: id,
+                title: title,
+                dueAt: day.map {
+                    calendar.date(from: DateComponents(
+                        year: 2026,
+                        month: 9,
+                        day: $0,
+                        hour: hour
+                    ))!
+                },
+                hasDueTime: hour != nil,
+                completed: completed,
+                priority: 0,
+                updatedAt: generatedAt
+            )
+        }
+        func export(
+            _ name: String,
+            reminders: [ReminderItem],
+            view: DeviceReminderView
+        ) throws {
+            let image = try ZectrixDisplayRenderer.previewImage(
+                reminders,
+                view: view,
+                generatedAt: generatedAt
+            )
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else {
+                XCTFail("无法导出 NOTE4 网页预览")
+                return
+            }
+            let url = URL(fileURLWithPath: directory).appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try png.write(to: url)
+        }
+
+        try export("preview-today.png", reminders: [
+            item("plan", "整理今日计划", day: nil, hour: nil),
+            item("review", "回复设计评审", day: 15, hour: 10),
+            item("edit", "剪辑产品视频", day: 15, hour: 14),
+            item("walk", "晚间散步", day: 15, hour: 19)
+        ], view: .today)
+        try export("preview-scheduled.png", reminders: [
+            item("meeting", "明天项目会议", day: 16, hour: 11),
+            item("dentist", "预约牙医", day: 18, hour: 15),
+            item("trip", "整理旅行清单", day: 20, hour: nil)
+        ], view: .scheduled)
+        try export("preview-completed.png", reminders: [
+            item("done-1", "提交项目方案", day: 15, hour: 10, completed: true),
+            item("done-2", "回复客户邮件", day: 15, hour: 11, completed: true),
+            item("done-3", "更新工作日志", day: 15, hour: 17, completed: true)
+        ], view: .completed)
     }
 }
