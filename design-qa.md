@@ -1,46 +1,56 @@
-# Design QA — NOTE4 四视图选择页
+# NOTE4 白色机身视觉核验
 
-## Evidence
+**Source visual truth**
 
-- Source visual truth: `/var/folders/4k/thzswf395k70hfzmrvtvhfph0000gn/T/codex-clipboard-8eaeaccf-9ee9-424d-bda0-d63fdb51ae07.png`
-- Implementation screenshot: `/Users/weihongli/Documents/New project/EInkReminders/previews/note4-view-picker.png`
-- Side-by-side comparison: `/Users/weihongli/Documents/New project/EInkReminders/previews/view-picker-comparison.png`
-- Source pixels: 538 × 286. Implementation pixels and physical viewport: 400 × 300 at 1×, matching the NOTE4 panel. Comparison canvas: 840 × 340.
-- State: “今天” selected; representative counts 3 / 6 / 8 / 12. Counts are drawn dynamically by firmware from the Mac snapshot.
+- `/var/folders/4k/thzswf395k70hfzmrvtvhfph0000gn/T/codex-clipboard-c6a9718f-0be2-417a-8321-b4000dc25a91.png`
+- 936 × 946 px，正面白色 NOTE4 实机参考。
 
-## Full-view comparison
+**Rendered implementation**
 
-The implementation preserves the source's 2 × 2 smart-list hierarchy, reading order, rounded-card proportions, icon/title/count placement, and clearly distinct selected state. Color has intentionally been translated to one-bit black and white: selection uses a sparse e-ink-safe dither plus a heavier outline. A compact title and hardware-control footer are intentional additions required by the physical device's settings navigation.
+- `/private/tmp/eink-note4-white-hero.png`
+- `/private/tmp/eink-note4-white-full.png`
+- `/private/tmp/eink-note4-white-mobile.png`
+- 桌面视口 1440 × 900 CSS px、完整页面视口 1440 × 5200 CSS px、移动端视口 500 × 1100 CSS px；deviceScaleFactor 1。
+- 并排比较证据：`/private/tmp/note4-qa-comparison.png`。
+- 状态：首页默认状态、浏览器支持刷机状态、四张视图预览默认状态。
 
-## Required fidelity surfaces
+**Full-view comparison evidence**
 
-- Fonts and typography: PingFang-derived CJK rasterization keeps the hierarchy legible at 400 × 300. Labels and counts retain the source's bold emphasis; the footer is intentionally smaller secondary text.
-- Spacing and layout rhythm: two equal columns and two equal rows align consistently, with balanced gutters and enough separation from the title and footer.
-- Colors and visual tokens: the colorful source cards are correctly reduced to pure black/white and a dither selection token for the monochrome panel.
-- Image and icon quality: all four icons come from macOS SF Symbols rather than hand-drawn approximations. They remain recognizable after one-bit conversion.
-- Copy and content: exactly four modules are present—今天、计划、全部、完成—with live numeric counts and explicit key guidance.
+- 实现已经从黑色横向显示器外框改为近方形白色 NOTE4：白色圆角机身、内凹 4:3 屏幕、左下扬声器孔、右下状态灯与圆形按键均与参考图的硬件识别特征一致。
+- 首页、四张界面卡片、GitHub 头图与网页分享图使用同一机身素材，外观没有跨区域漂移。
+- 400 × 300 屏幕内容完整贴合显示开口，没有遮挡机身边框或控制区。
+- 500 px 移动端视口下无水平溢出，设备完整可见，文字与刷机按钮未被裁切。
 
-## Focused-region comparison
+**Focused region comparison evidence**
 
-No separate crop was needed because the native 400 × 300 implementation and every card label, symbol, count, border, and footer remain readable in the side-by-side comparison.
+- 单独核对了屏幕开口：网页内容位于机身素材的 13.65% / 10.25% 起点，宽 72.7%、高 54.25%，保留了参考图中的浅灰内凹边缘。
+- 单独核对了下方控制区：扬声器孔、状态灯与圆形按键保持在屏幕之外，比例和左右位置与参考一致。
 
-## Findings
+**Required fidelity surfaces**
 
-- No actionable P0, P1, or P2 differences remain.
-- P3: the “计划” symbol contains finer pixels than the other three SF Symbols, but it is still recognizable on the native panel and does not affect navigation.
+- Fonts and typography：网页继续使用系统 SF / 苹方字体，标题层级、正文行高与屏幕内文字清晰度保持原设计；未因机身替换发生缩放或换行异常。
+- Spacing and layout rhythm：机身改为 1:1 外框，屏幕维持 4:3；桌面与移动端留白均衡，预览卡片之间的节奏一致。
+- Colors and visual tokens：机身采用白、浅灰与黑色控制元素，和白色实机参考一致；页面仍保留 Apple 风格的中性灰与系统蓝。
+- Image quality and asset fidelity：机身为基于实机参考生成的高分辨率独立图片资产，没有用 CSS 图形近似扬声器、按键或外壳。
+- Copy and content：产品名、NOTE4 黑白版兼容说明、Apple 生态联动文案与既有版本一致。
 
-## Comparison history
+**Findings**
 
-- First pass: SF Symbols were absent from the rendered bitmap. Fixed by rasterizing the system-symbol CGImage directly into the one-bit frame.
-- Second pass: all icons, labels, counts, card borders, and the selected state are visible in the post-fix comparison.
+- 没有剩余 P0、P1 或 P2 问题。
+- P3：参考图含产品说明连线，而网页刻意省略标注，以免与刷机主操作争夺注意力；这是可接受的展示场景差异。
 
-## Implementation checklist
+**Comparison history**
 
-- [x] 2 × 2 layout
-- [x] Four required smart views
-- [x] SF Symbols icons
-- [x] Dynamic counts
-- [x] Monochrome selected state
-- [x] Hardware navigation footer
+- 初始问题：旧版使用黑色横向边框，与白色 NOTE4 实机明显不符（P1）。
+- 修复：制作并接入统一的白色 NOTE4 机身素材，更新首页、四张预览卡片、GitHub 头图和 Open Graph 分享图。
+- 修复后证据：`/private/tmp/note4-qa-comparison.png` 显示硬件颜色、机身比例及下方控制区已经与参考图一致。
+
+**Implementation checklist**
+
+- [x] 首页主视觉改为白色 NOTE4。
+- [x] 四张界面预览改为白色 NOTE4。
+- [x] GitHub README 头图改为白色 NOTE4。
+- [x] 网页分享缩略图改为白色 NOTE4。
+- [x] 核验桌面、完整页面和移动端布局。
 
 final result: passed
