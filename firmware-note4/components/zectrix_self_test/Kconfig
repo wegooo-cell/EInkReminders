@@ -1,0 +1,19 @@
+menu "Zectrix hardware showcase"
+
+config ZECTRIX_DEMO_RF_TARGET_SSID
+    string "Optional Wi-Fi SSID for RF qualification"
+    default ""
+    help
+        Leave empty for a generic scan test. Set an SSID to require three
+        consecutive observations at or above the configured RSSI threshold.
+
+config ZECTRIX_DEMO_RF_THRESHOLD_DBM
+    int "RF qualification threshold (dBm)"
+    range -100 -20
+    default -70
+
+config ZECTRIX_DEMO_NFC_URL
+    string "Temporary NFC demonstration URL"
+    default "https://www.zectrix.com"
+
+endmenu

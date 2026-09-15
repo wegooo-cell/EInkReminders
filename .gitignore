@@ -1,0 +1,7 @@
+.DS_Store
+firmware/.pio/
+firmware-note4/build/
+macOS/.build/
+macOS/build/
+release/EInkReminders.app/
+*.tar.gz
