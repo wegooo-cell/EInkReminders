@@ -126,6 +126,7 @@ public:
         ESP_LOGI(kTag, "ready: UP previous, DOWN next, OK complete, hold UP settings");
         while (true) {
             HandlePendingWebAction();
+            MaintainWifiConnection();
             ZectrixButtonEvent event;
             if (!board_.WaitButton(&event, pdMS_TO_TICKS(500))) {
                 CheckDueAlerts();
@@ -134,12 +135,16 @@ public:
                 else if (ui_mode_ == UiMode::kReminders) HideSelectionIfIdle();
                 continue;
             }
-            if (portal_active_) continue;
             if (ui_mode_ != UiMode::kAlert && event.button == ZectrixButton::kUp &&
                 event.action == ZectrixButtonAction::kLongPress) {
                 HandleSettingsBack();
                 continue;
             }
+            // The QR setup screen ignores ordinary clicks, but settings must
+            // remain reachable so a saved network can be retried without
+            // scanning the code again. Once inside settings, normal button
+            // navigation continues even while the captive portal is active.
+            if (portal_active_ && ui_mode_ == UiMode::kReminders) continue;
             if (event.action != ZectrixButtonAction::kClick) continue;
             if (ui_mode_ == UiMode::kAlert) HandleAlertClick(event.button);
             else if (ui_mode_ != UiMode::kReminders) HandleSettingsClick(event.button);
@@ -383,9 +388,15 @@ private:
                 vTaskDelay(pdMS_TO_TICKS(1200));
                 return;
             }
-            esp_wifi_stop();
-            esp_netif_destroy_default_wifi(station_netif_);
-            station_netif_ = nullptr;
+            // A saved network being temporarily unavailable is not a request
+            // to provision again. Keep the previous reminder frame on screen
+            // and retry in the background. The portal is reserved for first
+            // boot or an explicit "重新配网" action from settings.
+            wifi_recovery_pending_ = true;
+            wifi_retry_at_ = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
+            ESP_LOGW(kTag, "saved Wi-Fi %s unavailable; retrying in background", ssid.c_str());
+            RenderSettingsFrame(kWifiReconnectFailedFrame);
+            return;
         }
         // AP+STA keeps the setup hotspot available while the station radio
         // scans nearby networks for the Chinese configuration page.
@@ -410,6 +421,36 @@ private:
         ESP_LOGI(kTag, "configuration hotspot: %s / http://192.168.4.1",
                  reinterpret_cast<const char*>(access_point.ap.ssid));
         ShowWifiSetupScreen();
+    }
+
+    void MaintainWifiConnection() {
+        if (portal_active_ || station_netif_ == nullptr) return;
+        wifi_ap_record_t access_point = {};
+        if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+            if (!wifi_recovery_pending_) return;
+            wifi_recovery_pending_ = false;
+            wifi_retry_at_ = 0;
+            ESP_LOGI(kTag, "saved Wi-Fi reconnected in background");
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                sync_requested_ = true;
+                sync_requested_at_us_ = 0;
+            }
+            if (ui_mode_ == UiMode::kReminders && !RenderIdleFrame()) {
+                RenderSettingsFrame(kSyncRequestedFrame);
+            }
+            return;
+        }
+
+        wifi_recovery_pending_ = true;
+        const TickType_t now = xTaskGetTickCount();
+        if (wifi_retry_at_ != 0 &&
+            static_cast<int32_t>(now - wifi_retry_at_) < 0) return;
+        const esp_err_t result = esp_wifi_connect();
+        if (result != ESP_OK) {
+            ESP_LOGD(kTag, "background Wi-Fi retry pending: %s", esp_err_to_name(result));
+        }
+        wifi_retry_at_ = now + pdMS_TO_TICKS(10000);
     }
 
     void StartServer() {
@@ -1590,6 +1631,10 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             nvs_commit(nvs);
             nvs_close(nvs);
         }
+        if (portal_active_) {
+            ExitSettings();
+            return;
+        }
         ui_mode_ = UiMode::kReminders;
         RenderSettingsFrame(kSwitchingViewFrame);
     }
@@ -1602,6 +1647,10 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             selection_visible_ = false;
         }
         ui_mode_ = UiMode::kReminders;
+        if (portal_active_) {
+            ShowWifiSetupScreen();
+            return;
+        }
         if (!RenderIdleFrame()) {
             // With no cached view, the Mac must rebuild even if its reminder
             // array has not changed since the previous successful sync.
@@ -1667,6 +1716,10 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         {
             std::lock_guard<std::mutex> lock(mutex_);
             selection_visible_ = false;
+        }
+        if (portal_active_) {
+            ShowWifiSetupScreen();
+            return;
         }
         if (!RenderIdleFrame(force_full)) RequestSync();
     }
@@ -1762,6 +1815,10 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             return;
         }
         esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        portal_active_ = false;
+        portal_ssid_.clear();
+        wifi_recovery_pending_ = false;
+        wifi_retry_at_ = 0;
         ESP_LOGI(kTag, "reconnected saved Wi-Fi %s at %s", ssid.c_str(), address);
         message_returns_to_network_ = false;
         RenderSettingsFrame(kWifiReconnectSuccessFrame);
@@ -1863,6 +1920,8 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     esp_netif_t* portal_netif_ = nullptr;
     bool portal_active_ = false;
     std::string portal_ssid_;
+    bool wifi_recovery_pending_ = false;
+    TickType_t wifi_retry_at_ = 0;
     std::mutex mutex_;
     std::mutex display_mutex_;
     std::vector<Operation> operations_;
