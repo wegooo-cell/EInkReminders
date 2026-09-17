@@ -105,9 +105,23 @@ final class DisplayRendererTests: XCTestCase {
             priority: 0,
             updatedAt: now
         )
+
         XCTAssertFalse(ReminderStore.belongsToToday(reminder, now: now, calendar: calendar))
-        XCTAssertEqual(DisplayRenderer.displayDueLabel(for: reminder, relativeTo: now), "明天 11:00")
-        XCTAssertNil(DisplayRenderer.dayPeriod(for: reminder, relativeTo: now))
+        XCTAssertEqual(
+            DisplayRenderer.displayDueLabel(
+                for: reminder,
+                relativeTo: now,
+                calendar: calendar
+            ),
+            "明天 11:00"
+        )
+        XCTAssertNil(
+            DisplayRenderer.dayPeriod(
+                for: reminder,
+                relativeTo: now,
+                calendar: calendar
+            )
+        )
     }
 
     func testAllAndScheduledViewsRenderFutureRows() throws {
@@ -288,17 +302,64 @@ final class DisplayRendererTests: XCTestCase {
                 updatedAt: reference
             )
         }
-        XCTAssertEqual(DisplayRenderer.displayDueLabel(for: item(nil), relativeTo: reference), "今天")
-        XCTAssertEqual(DisplayRenderer.displayDueLabel(for: item(10), relativeTo: reference), "10:00")
-        XCTAssertEqual(DisplayRenderer.dayPeriod(for: item(9), relativeTo: reference), .morning)
-        XCTAssertEqual(DisplayRenderer.dayPeriod(for: item(14), relativeTo: reference), .afternoon)
-        XCTAssertEqual(DisplayRenderer.dayPeriod(for: item(17), relativeTo: reference), .evening)
+
+        // 传入固定时区的日历，结果不随本机时区变化。
+        func label(_ hour: Int?) -> String {
+            DisplayRenderer.displayDueLabel(
+                for: item(hour),
+                relativeTo: reference,
+                calendar: calendar
+            )
+        }
+        func period(_ hour: Int) -> DisplayRenderer.DayPeriod? {
+            DisplayRenderer.dayPeriod(
+                for: item(hour),
+                relativeTo: reference,
+                calendar: calendar
+            )
+        }
+
+        XCTAssertEqual(label(nil), "今天")
+        XCTAssertEqual(label(10), "10:00")
+
+        XCTAssertEqual(period(9), .morning)
+        XCTAssertEqual(period(14), .afternoon)
+        XCTAssertEqual(period(17), .evening)
     }
 
     func testAutomaticSyncIntervalsMatchTheUserChoices() {
         XCTAssertEqual(
             AutomaticSyncInterval.allCases.map(\.title),
             ["30 秒", "1 分钟", "10 分钟", "30 分钟", "1 小时"]
+        )
+    }
+
+    func testSelectedRowStaysVisibleAfterFiveLocalCompletions() throws {
+        let now = Date()
+        let reminders = (0..<7).map {
+            ReminderItem(
+                syncId: String($0),
+                title: "事项 \($0 + 1)",
+                completed: $0 < 5,
+                priority: 0,
+                updatedAt: now
+            )
+        }
+
+        // 本地排队完成 5 项后，带选中与不带选中的画面必须不同，选中行才看得见。
+        XCTAssertNotEqual(
+            try ZectrixDisplayRenderer.render(
+                reminders,
+                selectedIndex: 0,
+                view: .all,
+                generatedAt: now
+            ),
+            try ZectrixDisplayRenderer.render(
+                reminders,
+                selectedIndex: nil,
+                view: .all,
+                generatedAt: now
+            )
         )
     }
 

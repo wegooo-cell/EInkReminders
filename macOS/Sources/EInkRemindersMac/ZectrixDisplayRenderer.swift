@@ -148,7 +148,14 @@ enum ZectrixDisplayRenderer {
         }
 
         let pending = reminders.filter { !$0.completed }
-        let completedItems = Array(reminders.filter(\.completed).prefix(5))
+
+        // 还有待办时，已完成行最多占 4 行，始终给选中的待办留一行：
+        // 否则本地连续完成 5 项后选中行不再绘制，OK 会完成一个看不见的事项。
+        let completedItems = Array(
+            reminders
+                .filter(\.completed)
+                .prefix(pending.isEmpty ? 5 : 4)
+        )
         let pendingCapacity = max(0, 5 - completedItems.count)
         let visiblePending = DisplayRenderer.visiblePendingItems(
             pending,
