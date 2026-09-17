@@ -33,21 +33,13 @@ static size_t question_end(const uint8_t* packet, size_t length) {
 static size_t make_reply(const uint8_t* request, size_t request_length,
                          uint8_t* reply, size_t reply_capacity,
                          uint32_t address) {
-    if (request_length < 12 || request_length > reply_capacity) return 0;
+    if (request_length < 12) return 0;
+
+    // 回复只保留头部和唯一的问题段，问题数不为 1 的请求无法据此构造合法回复，直接忽略。
+    if (request[4] != 0 || request[5] != 1) return 0;
+
     const size_t end = question_end(request, request_length);
     if (end == 0) return 0;
-
-    memcpy(reply, request, request_length);
-    reply[2] = (uint8_t)((reply[2] & 0x79) | 0x80);  // response, standard query
-    reply[3] = (uint8_t)((reply[3] & 0x10) | 0x80);  // recursion available
-
-    const uint16_t type = (uint16_t)((request[end - 4] << 8) | request[end - 3]);
-    const uint16_t klass = (uint16_t)((request[end - 2] << 8) | request[end - 1]);
-    if (type != 1 || klass != 1 || request[4] != 0 || request[5] != 1) {
-        reply[6] = 0;
-        reply[7] = 0;
-        return request_length;
-    }
 
     static const uint8_t answer_prefix[] = {
         0xC0, 0x0C,       // compressed pointer to the requested name
@@ -56,12 +48,26 @@ static size_t make_reply(const uint8_t* request, size_t request_length,
         0x00, 0x00, 0x00, 0x3C,  // 60 second TTL
         0x00, 0x04        // IPv4 payload length
     };
-    if (request_length + sizeof(answer_prefix) + 4 > reply_capacity) return 0;
-    reply[6] = 0;
+
+    if (end + sizeof(answer_prefix) + 4 > reply_capacity) return 0;
+
+    // 只复制头部和问题段：请求附带的 additional 记录（如 EDNS0 OPT）若原样保留，
+    // 追加的 A 记录就会落在 additional 段之后，回复结构错误。
+    memcpy(reply, request, end);
+    reply[2] = (uint8_t)((reply[2] & 0x79) | 0x80);  // response, standard query
+    reply[3] = (uint8_t)((reply[3] & 0x10) | 0x80);  // recursion available
+
+    // ANCOUNT、NSCOUNT、ARCOUNT 先清零，只有 A 查询再把 ANCOUNT 置 1。
+    memset(reply + 6, 0, 6);
+
+    const uint16_t type = (uint16_t)((request[end - 4] << 8) | request[end - 3]);
+    const uint16_t klass = (uint16_t)((request[end - 2] << 8) | request[end - 1]);
+    if (type != 1 || klass != 1) return end;
+
     reply[7] = 1;
-    memcpy(reply + request_length, answer_prefix, sizeof(answer_prefix));
-    memcpy(reply + request_length + sizeof(answer_prefix), &address, 4);
-    return request_length + sizeof(answer_prefix) + 4;
+    memcpy(reply + end, answer_prefix, sizeof(answer_prefix));
+    memcpy(reply + end + sizeof(answer_prefix), &address, 4);
+    return end + sizeof(answer_prefix) + 4;
 }
 
 static void captive_dns_task(void* parameter) {

@@ -1698,12 +1698,11 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
                 nvs_close(nvs);
             }
         } else if (confirm_action_ == ConfirmAction::kFactoryReset) {
-            nvs_handle_t nvs;
-            if (nvs_open(kNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
-                nvs_erase_all(nvs);
-                nvs_commit(nvs);
-                nvs_close(nvs);
-            }
+            // esp_wifi_set_config 会把网络另存到 Wi-Fi 驱动的 nvs.net80211，
+            // 只擦应用命名空间会留下旧网络：先恢复驱动默认配置，再擦除整个 NVS 分区。
+            esp_wifi_restore();
+            nvs_flash_erase();
+
             esp_spiffs_format("storage");
         }
         board_.SetPowerLed(true);
@@ -1815,14 +1814,31 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             return;
         }
         esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+
+        const bool reconnected_in_portal = portal_active_;
         portal_active_ = false;
         portal_ssid_.clear();
         wifi_recovery_pending_ = false;
         wifi_retry_at_ = 0;
+
         ESP_LOGI(kTag, "reconnected saved Wi-Fi %s at %s", ssid.c_str(), address);
         message_returns_to_network_ = false;
         RenderSettingsFrame(kWifiReconnectSuccessFrame);
         vTaskDelay(pdMS_TO_TICKS(900));
+
+        // 能在门户里重连成功，说明已有保存的网络，门户是「重新配网」写入的 forcePortal 触发的。
+        // 擦掉该标记并重启，关闭设备热点和通配 DNS 任务，下次启动直接使用已保存的网络。
+        if (reconnected_in_portal) {
+            nvs_handle_t nvs;
+            if (nvs_open(kNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
+                nvs_erase_key(nvs, "forcePortal");
+                nvs_commit(nvs);
+                nvs_close(nvs);
+            }
+
+            esp_restart();
+        }
+
         RequestSync();
     }
 
