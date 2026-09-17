@@ -255,15 +255,49 @@ final class DisplayRendererTests: XCTestCase {
             syncId: "reopened",
             completed: false
         )
-        let created = DeviceOperation(
+        let snoozed = DeviceOperation(
             sequence: 3,
-            type: .create,
-            syncId: "created",
-            title: "新事项"
+            type: .setDueAt,
+            syncId: "snoozed",
+            dueAtEpochMs: 1_800_000_300_000
         )
         XCTAssertEqual(
-            AppModel.completedOnDeviceIDs(from: [completed, reopened, created]),
+            AppModel.completedOnDeviceIDs(from: [completed, reopened, snoozed]),
             ["device"]
+        )
+    }
+
+    func testTodayViewOrderMatchesScreenOrder() {
+        let calendar = Calendar.current
+        let now = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: Date())!
+
+        func item(_ id: String, dueAt: Date?, timed: Bool) -> ReminderItem {
+            ReminderItem(
+                syncId: id,
+                title: id,
+                dueAt: dueAt,
+                hasDueTime: timed,
+                completed: false,
+                priority: 0,
+                updatedAt: now
+            )
+        }
+
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)
+        let tenInTheMorning = calendar.date(bySettingHour: 10, minute: 0, second: 0, of: now)
+        let sevenInTheEvening = calendar.date(bySettingHour: 19, minute: 0, second: 0, of: now)
+        let fetched = [
+            item("overdue", dueAt: yesterday, timed: true),
+            item("date-only", dueAt: calendar.startOfDay(for: now), timed: false),
+            item("morning", dueAt: tenInTheMorning, timed: true),
+            item("evening", dueAt: sevenInTheEvening, timed: true),
+            item("undated", dueAt: nil, timed: false)
+        ]
+
+        // 屏幕先画不属于时段分组的事项，再画上午、下午、今晚；按键移动的列表顺序必须一致。
+        XCTAssertEqual(
+            ReminderStore.orderedLikeTodayScreen(fetched, now: now).map(\.syncId),
+            ["overdue", "date-only", "undated", "morning", "evening"]
         )
     }
 

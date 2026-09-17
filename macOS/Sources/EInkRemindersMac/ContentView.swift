@@ -123,6 +123,26 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // 设备操作写回失败时提示，最新一条的原因展示在下方，用户确认后清除。
+            if let latest = model.deadLetters.last {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("\(model.deadLetters.count) 项设备操作未能写回")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                        Spacer()
+                        Button("清除") { model.clearDeadLetters() }
+                            .buttonStyle(.link)
+                            .font(.caption)
+                    }
+
+                    Text(latest.message)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             Spacer()
 
             Text("NOTE4：上/下选择 · OK 确认 · 长按上键设置")

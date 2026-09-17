@@ -24,7 +24,12 @@ enum AutomaticSyncInterval: Int, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var deviceURL: String {
-        didSet { defaults.set(deviceURL, forKey: Keys.deviceURL) }
+        didSet {
+            defaults.set(deviceURL, forKey: Keys.deviceURL)
+
+            // 地址改了就重新记录设备：下一次同步以新地址上的 NOTE4 为准。
+            defaults.removeObject(forKey: Keys.deviceId)
+        }
     }
     @Published var selectedCalendarId: String? {
         didSet { defaults.set(selectedCalendarId, forKey: Keys.calendarId) }
@@ -36,6 +41,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var emptyState: ReminderEmptyState = .noItems
     @Published private(set) var statusText = "尚未同步"
     @Published private(set) var isSyncing = false
+
+    /// 没能写回 Apple 提醒事项、已随确认从设备队列移除的操作，持久化保存直到用户清除。
+    @Published private(set) var deadLetters: [DeadLetter] = []
+
     @Published private(set) var displayWidth = ZectrixDisplayRenderer.width
     @Published private(set) var displayHeight = ZectrixDisplayRenderer.height
     @Published var automaticSync: Bool {
@@ -56,16 +65,30 @@ final class AppModel: ObservableObject {
     private var timer: Timer?
     private var deviceRequestTimer: Timer?
     private var changeObserver: NSObjectProtocol?
+
+    /// 系统日期变化的通知观察者，跨过午夜后触发同步。
+    private var dayChangeObserver: NSObjectProtocol?
+
     private var reminderChangeSyncTask: Task<Void, Never>?
     private var reminderChangeSyncPending = false
     private var lastRenderedItems: [ReminderItem]?
     private var lastRenderProfile: String?
     private var lastRenderedEmptyState: ReminderEmptyState?
+
+    /// 上一次渲染画面所在的日期；跨过午夜后页头日期和「今天 / 明天」标签都要重绘。
+    private var lastRenderedDay: Date?
+
     private var cachedZectrixItems: [ReminderItem] = []
     private var cachedZectrixView: DeviceReminderView = .today
     private var cachedZectrixRevision: UInt64 = 0
     private var lastAlertSignatures: [String] = []
     private var isServingDisplayRequest = false
+
+    /// 设备轮询的单飞标志，在第一次 await 之前置位。
+    private var isPollingDevice = false
+
+    /// 阻止 App Nap 节流计时器：设备按键出画面依赖每秒一次的轮询。
+    private var pollingActivity: NSObjectProtocol?
 
     init(
         previewReminders: [ReminderItem] = [],
@@ -74,7 +97,7 @@ final class AppModel: ObservableObject {
         self.defaults = defaults
         let identities = SyncIdentityStore()
         reminderStore = ReminderStore(identities: identities)
-        deviceURL = defaults.string(forKey: Keys.deviceURL) ?? "http://192.168.1.42"
+        deviceURL = defaults.string(forKey: Keys.deviceURL) ?? ""
         selectedCalendarId = defaults.string(forKey: Keys.calendarId)
         automaticSync = defaults.object(forKey: Keys.automaticSync) as? Bool ?? true
         automaticSyncInterval = AutomaticSyncInterval(
@@ -82,6 +105,8 @@ final class AppModel: ObservableObject {
         ) ?? .thirtySeconds
         reminders = previewReminders
         activeViewTotalCount = previewReminders.count
+        deadLetters = defaults.data(forKey: Keys.deadLetters)
+            .flatMap { try? WireCoding.decoder().decode([DeadLetter].self, from: $0) } ?? []
 
         changeObserver = NotificationCenter.default.addObserver(
             forName: .EKEventStoreChanged,
@@ -92,11 +117,33 @@ final class AppModel: ObservableObject {
                 self?.scheduleReminderChangeSync()
             }
         }
+
+        // 跨过午夜后立即同步一次，不等下一个同步周期，屏幕上的日期和相对时间标签随之更新。
+        dayChangeObserver = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard self?.automaticSync == true else { return }
+                await self?.sync()
+            }
+        }
+
+        // 窗口关闭或应用在后台时，App Nap 会节流计时器，设备按键要等很久才出画面；
+        // 仍允许系统空闲睡眠。
+        pollingActivity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep,
+            reason: "轮询 NOTE4 的按键与同步请求"
+        )
+
         configureAutomaticSyncTimer()
     }
 
     deinit {
         if let changeObserver { NotificationCenter.default.removeObserver(changeObserver) }
+        if let dayChangeObserver { NotificationCenter.default.removeObserver(dayChangeObserver) }
+        if let pollingActivity { ProcessInfo.processInfo.endActivity(pollingActivity) }
         reminderChangeSyncTask?.cancel()
         timer?.invalidate()
         deviceRequestTimer?.invalidate()
@@ -161,15 +208,31 @@ final class AppModel: ObservableObject {
             }
             reminderChangeSyncPending = false
             statusText = "检测到提醒事项变化，正在同步…"
-            await sync(force: true)
+
+            // 新的 EventKit 通知会取消本任务。同步放进独立任务，不随之取消，
+            // 否则写回做到一半就会中断、操作得不到确认；新变化由下一轮循环处理。
+            await Task { await sync(force: true) }.value
         }
     }
 
     private func pollForDeviceSyncRequest() async {
-        guard !isSyncing, !isServingDisplayRequest, let baseURL = normalizedURL else { return }
+        guard !isPollingDevice,
+              !isSyncing,
+              !isServingDisplayRequest,
+              let baseURL = normalizedURL else { return }
+
+        // 计时器每秒新建一个任务：单飞标志必须在第一次 await 之前置位，上一轮没结束就跳过本轮，
+        // 避免设备响应慢或离线时请求堆积、画面重叠乱序上传。
+        isPollingDevice = true
+        defer { isPollingDevice = false }
+
         do {
             let client = DeviceClient(baseURL: baseURL)
             let deviceStatus = try await client.status()
+
+            // 等待状态期间可能已经开始同步：放弃本轮，避免在新快照之后上传按旧列表渲染的画面。
+            guard !isSyncing else { return }
+
             if deviceStatus.displayRequested == true,
                deviceStatus.view == cachedZectrixView,
                deviceStatus.revision == cachedZectrixRevision,
@@ -185,8 +248,10 @@ final class AppModel: ObservableObject {
                 )
                 return
             }
-            if automaticSync,
-               deviceStatus.syncRequested == true,
+
+            // 设备上的完成、切换视图和「立即同步」都是用户的明确操作，不受「自动同步」开关限制；
+            // 开关只控制定时同步和提醒事项变化触发的同步。
+            if deviceStatus.syncRequested == true,
                deviceStatus.syncRequestAgeMs.map({ $0 >= 5_000 }) ?? true {
                 await sync()
             }
@@ -203,7 +268,12 @@ final class AppModel: ObservableObject {
                 return
             }
             calendars = reminderStore.calendars.map { ($0.calendarIdentifier, $0.title) }
-            if selectedCalendarId == nil { selectedCalendarId = calendars.first?.id }
+
+            // 保存的列表可能已被删除：和未选择一样改选第一个列表，不能带着失效的标识去同步。
+            if !calendars.contains(where: { $0.id == selectedCalendarId }) {
+                selectedCalendarId = calendars.first?.id
+            }
+
             await sync()
         } catch {
             statusText = error.localizedDescription
@@ -216,12 +286,27 @@ final class AppModel: ObservableObject {
             statusText = "设备地址无效"
             return
         }
+
+        // 所选列表不可用时本轮同步无法完成、设备操作不会被确认：先停下，
+        // 否则设备持续请求同步时，同一批操作会被反复写回 Apple 提醒事项。
+        let hasSelectedList = reminderStore.calendars.contains {
+            $0.calendarIdentifier == selectedCalendarId
+        }
+        guard hasSelectedList else {
+            statusText = "同步失败：\(ReminderStore.StoreError.listUnavailable.localizedDescription)"
+            return
+        }
+
         isSyncing = true
         defer { isSyncing = false }
 
         do {
             let client = DeviceClient(baseURL: baseURL)
             let deviceStatus = try await client.status()
+
+            // 等待状态期间设备地址可能被修改：读到的是旧地址上的设备，放弃本轮，也不能据此记录配对。
+            guard normalizedURL == baseURL else { return }
+
             if !force,
                deviceStatus.syncRequested == true,
                let age = deviceStatus.syncRequestAgeMs,
@@ -235,6 +320,14 @@ final class AppModel: ObservableObject {
                 statusText = "同步失败：当前版本仅支持 ZECTRIX NOTE4 黑白版（400 × 300）"
                 return
             }
+
+            // 路由器可能把这个地址重新分配给另一台 NOTE4：只和第一次连上的设备同步，
+            // 设备地址被修改后才重新记录。
+            guard matchesPairedDevice(deviceStatus.deviceId) else {
+                statusText = "同步失败：该地址上的 NOTE4 不是之前同步的设备，请确认设备地址"
+                return
+            }
+
             activeView = deviceStatus.view ?? .today
             let renderProfile = "zectrix-note4-\(deviceStatus.firmwareVersion ?? "unknown")-\(activeView.rawValue)"
             // The device's durable queue is the source of truth. Always read
@@ -244,9 +337,10 @@ final class AppModel: ObservableObject {
             // removed only by the ACK below.
             let operations = try await client.operations(after: 0)
             let sortedOperations = operations.sorted(by: { $0.sequence < $1.sequence })
-            for operation in sortedOperations {
-                try reminderStore.apply(operation, calendarIdentifier: selectedCalendarId)
-            }
+
+            // 单条写回失败不中断同步，下方的确认覆盖本轮读到的全部操作。
+            // 写回失败的操作先暂存，确认成功、它们从设备队列移除后才记入死信。
+            let failedOperations = applyDeviceOperations(sortedOperations)
 
             let viewSnapshot = try await reminderStore.fetchView(
                 activeView,
@@ -256,9 +350,13 @@ final class AppModel: ObservableObject {
             activeViewTotalCount = viewSnapshot.totalCount
             emptyState = viewSnapshot.emptyState
             reminders = viewSnapshot.items
+
+            // 页头日期、「今天 / 明天」标签和时段分组都在渲染时写死，跨天后即使事项不变也要重绘。
+            let renderDay = Calendar.current.startOfDay(for: Date())
             let needsRefresh = lastRenderedItems != reminders ||
                 lastRenderProfile != renderProfile ||
                 lastRenderedEmptyState != emptyState ||
+                lastRenderedDay != renderDay ||
                 Self.requiresFrameRebuild(deviceRevision: deviceStatus.revision)
             let revision = UInt64(Date().timeIntervalSince1970 * 1_000)
             let now = Date()
@@ -313,12 +411,14 @@ final class AppModel: ObservableObject {
                 lastRenderedItems = reminders
                 lastRenderProfile = renderProfile
                 lastRenderedEmptyState = emptyState
+                lastRenderedDay = renderDay
             }
-            // The operation is acknowledged only after EventKit, the snapshot,
-            // and every required display frame have all succeeded. Replaying a
-            // completion after a transient failure is safe and idempotent.
+
+            // 每条操作都已写回、确认提醒不存在或暂存为死信，快照和所需画面也都发送成功后，才确认操作。
+            // 中途失败时设备会重放全部操作，已经完成的提醒不会被重复保存。
             if let last = operations.map(\.sequence).max() {
                 try await client.acknowledge(through: last)
+                recordDeadLetters(failedOperations)
             }
             if deviceStatus.syncRequested == true {
                 try await client.acknowledgeSyncRequest()
@@ -377,8 +477,58 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// 判断设备是否为之前同步的那一台：第一次连上时记住设备 ID，之后只接受同一台设备。
+    private func matchesPairedDevice(_ deviceId: String) -> Bool {
+        guard let pairedDeviceId = defaults.string(forKey: Keys.deviceId) else {
+            defaults.set(deviceId, forKey: Keys.deviceId)
+            return true
+        }
+
+        return pairedDeviceId == deviceId
+    }
+
+    /// 把设备操作逐条写回 Apple 提醒事项，返回写回失败、需要记入死信的操作。
+    private func applyDeviceOperations(_ operations: [DeviceOperation]) -> [DeadLetter] {
+        var failed: [DeadLetter] = []
+
+        for operation in operations {
+            do {
+                try reminderStore.apply(operation)
+            } catch ReminderStore.StoreError.reminderNotFound {
+                // 提醒已在其他设备上删除或标识已失效，没有可写回的对象，视为已处理。
+                continue
+            } catch {
+                // 列表只读等错误重试也不会成功：记入死信并在界面提示。
+                failed.append(DeadLetter(
+                    operation: operation,
+                    message: error.localizedDescription
+                ))
+            }
+        }
+
+        return failed
+    }
+
+    /// 记录已随确认从设备队列移除、但没能写回的操作，并持久化。
+    private func recordDeadLetters(_ failed: [DeadLetter]) {
+        guard !failed.isEmpty else { return }
+
+        deadLetters.append(contentsOf: failed)
+        defaults.set(try? WireCoding.encoder().encode(deadLetters), forKey: Keys.deadLetters)
+    }
+
+    /// 用户看过提示后清除全部死信。
+    func clearDeadLetters() {
+        deadLetters = []
+        defaults.removeObject(forKey: Keys.deadLetters)
+    }
+
     private var normalizedURL: URL? {
         var value = deviceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 未填写设备地址时视为无效，不访问任何设备。
+        guard !value.isEmpty else { return nil }
+
         if !value.contains("://") { value = "http://" + value }
         return URL(string: value)
     }
@@ -450,5 +600,7 @@ final class AppModel: ObservableObject {
         static let calendarId = "calendarId"
         static let automaticSync = "automaticSync"
         static let automaticSyncInterval = "automaticSyncInterval"
+        static let deviceId = "deviceId"
+        static let deadLetters = "deadLetters"
     }
 }

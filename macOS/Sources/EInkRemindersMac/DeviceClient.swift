@@ -17,7 +17,12 @@ struct DeviceClient: Sendable {
     func operations(after sequence: UInt64) async throws -> [DeviceOperation] {
         var components = URLComponents(url: baseURL.appendingPathComponent("api/operations"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "after", value: String(sequence))]
-        let (data, response) = try await session.data(from: components.url!)
+
+        // 与 get 相同，读接口缩短超时，设备离线时尽快失败。
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
         try validate(response, data: data, endpoint: "/api/operations")
         return try WireCoding.decoder().decode(DeviceOperationsResponse.self, from: data).operations
     }
@@ -58,7 +63,13 @@ struct DeviceClient: Sendable {
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, response) = try await session.data(from: baseURL.appendingPathComponent(path))
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+
+        // 读接口不用默认的 60 秒超时，设备离线时每秒一次的轮询要尽快失败。
+        // 设备处理画面上传时会同步刷新墨水屏，读请求可能排队数秒，10 秒足够覆盖。
+        request.timeoutInterval = 10
+
+        let (data, response) = try await session.data(for: request)
         try validate(response, data: data, endpoint: "/\(path)")
         return try WireCoding.decoder().decode(T.self, from: data)
     }
