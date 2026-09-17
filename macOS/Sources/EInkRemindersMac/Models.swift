@@ -108,7 +108,6 @@ struct DeviceOperationsResponse: Codable, Sendable {
 
 struct DeviceOperation: Codable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case create
         case setCompleted
         case setDueAt
     }
@@ -117,13 +116,17 @@ struct DeviceOperation: Codable, Identifiable, Sendable {
     let type: Kind
     let syncId: String
     var appleId: String?
-    var title: String?
-    var notes: String?
-    var dueAt: Date?
     var dueAtEpochMs: Int64?
     var completed: Bool?
 
     var id: UInt64 { sequence }
+}
+
+/// 无法写回 Apple 提醒事项的设备操作。它已随确认从设备队列移除，保存在 Mac 上供界面提示，
+/// 避免一条失败的操作卡住之后的全部同步。
+struct DeadLetter: Codable, Sendable {
+    let operation: DeviceOperation
+    let message: String
 }
 
 enum WireCoding {
