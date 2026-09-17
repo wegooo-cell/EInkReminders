@@ -27,14 +27,12 @@ returned `zectrix_epd_config_t` before creating the driver.
 
 ## Power behavior
 
-At boot, the demo asserts the battery latch before peripheral initialization.
-The display has a separate controlled rail and remains off until a refresh.
-Audio is initialized lazily when the audio test first runs.
+- At boot, the firmware asserts the battery latch before peripheral initialization.
+- The display has a separate controlled rail and remains off until a refresh.
+- Audio is initialized lazily when a reminder sound plays and released afterwards.
 
-Battery voltage is read through the board ADC path and displayed as both
-millivolts and an estimated percentage. The charging test combines charger
-status pins with the battery measurement to reject a false pass when no
-battery is fitted.
+Battery voltage is read through the board ADC path and displayed as an
+estimated percentage.
 
 ## Porting to another revision
 
@@ -42,4 +40,3 @@ battery is fitted.
 2. Override the EPD configuration in `main/app_main.cc` if its SPI wiring
    changed.
 3. Confirm flash size, PSRAM mode and partition layout in `sdkconfig.defaults`.
-4. Re-run every item in `docs/TEST_CRITERIA.md` on real hardware.

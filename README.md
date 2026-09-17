@@ -153,8 +153,10 @@ Mac App 要求 macOS 13 或更高版本。首次打开：
 3. 选择需要同步的 Apple 提醒事项列表。
 4. 开启自动同步，点击“立即同步”。
 
-Release 中的应用使用 ad-hoc 本地签名。若 macOS 阻止首次启动，可在 Finder 中右键应用，
-选择“打开”，再确认一次。
+Release 中的应用使用 ad-hoc 本地签名。若 macOS 阻止首次启动：
+
+- macOS 14 及更早版本：在 Finder 中右键应用，选择“打开”，再确认一次。
+- macOS 15 及更高版本：先尝试打开一次应用，再到“系统设置 → 隐私与安全性”点击“仍要打开”。
 
 从源码构建：
 
@@ -163,9 +165,12 @@ Release 中的应用使用 ad-hoc 本地签名。若 macOS 阻止首次启动，
     ./build-app.sh
     open build/墨水屏提醒事项.app
 
+其中 <code>swift test</code> 需要安装完整的 Xcode；Command Line Tools 不含 XCTest，无法运行测试。
+
 ## 首次配网
 
-NOTE4 没有保存 Wi-Fi，或无法连接原网络时，会建立 <code>EInk-Note4-XXXX</code> 热点并显示二维码。
+NOTE4 只有在没有保存 Wi-Fi，或在设备设置或手机控制页中选择“重新配网”后，
+才会建立 <code>EInk-Note4-XXXX</code> 热点并显示二维码。
 
 1. 用 iPhone 相机扫描屏幕二维码并加入设备热点。
 2. 中文配网页面通常会自动弹出；未弹出时访问 <code>http://192.168.4.1</code>。

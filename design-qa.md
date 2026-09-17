@@ -2,16 +2,11 @@
 
 **Source visual truth**
 
-- `/var/folders/4k/thzswf395k70hfzmrvtvhfph0000gn/T/codex-clipboard-c6a9718f-0be2-417a-8321-b4000dc25a91.png`
 - 936 × 946 px，正面白色 NOTE4 实机参考。
 
 **Rendered implementation**
 
-- `/private/tmp/eink-note4-white-hero.png`
-- `/private/tmp/eink-note4-white-full.png`
-- `/private/tmp/eink-note4-white-mobile.png`
 - 桌面视口 1440 × 900 CSS px、完整页面视口 1440 × 5200 CSS px、移动端视口 500 × 1100 CSS px；deviceScaleFactor 1。
-- 并排比较证据：`/private/tmp/note4-qa-comparison.png`。
 - 状态：首页默认状态、浏览器支持刷机状态、四张视图预览默认状态。
 
 **Full-view comparison evidence**
@@ -43,7 +38,7 @@
 
 - 初始问题：旧版使用黑色横向边框，与白色 NOTE4 实机明显不符（P1）。
 - 修复：制作并接入统一的白色 NOTE4 机身素材，更新首页、四张预览卡片、GitHub 头图和 Open Graph 分享图。
-- 修复后证据：`/private/tmp/note4-qa-comparison.png` 显示硬件颜色、机身比例及下方控制区已经与参考图一致。
+- 修复后证据：硬件颜色、机身比例及下方控制区已经与参考图一致。
 
 **Implementation checklist**
 
