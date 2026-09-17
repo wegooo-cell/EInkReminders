@@ -276,7 +276,14 @@ final class AppModel: ObservableObject {
                 }
                 try await client.send(snapshot: DeviceSnapshot(
                     revision: revision,
-                    reminders: reminders,
+                    view: activeView,
+                    reminders: reminders.map {
+                        DeviceSnapshotItem(
+                            syncId: $0.syncId,
+                            appleId: $0.appleId,
+                            completed: $0.completed
+                        )
+                    },
                     viewCounts: nil,
                     currentViewCount: viewSnapshot.items.count,
                     replaceDisplay: needsRefresh,
@@ -321,7 +328,7 @@ final class AppModel: ObservableObject {
                 try await client.acknowledge(through: last)
             }
             if deviceStatus.syncRequested == true {
-                try await client.acknowledgeSyncRequest()
+                try await client.acknowledgeSyncRequest(id: deviceStatus.syncRequestId)
             }
             statusText = "已同步“\(activeView.title)”视图 \(viewSnapshot.totalCount) 项\(needsRefresh ? "并刷新屏幕" : "") · \(Self.clock.string(from: Date()))"
         } catch {

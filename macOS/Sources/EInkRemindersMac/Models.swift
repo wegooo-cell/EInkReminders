@@ -71,12 +71,23 @@ enum ReminderEmptyState: String, Sendable {
 
 struct DeviceSnapshot: Codable, Sendable {
     let revision: UInt64
-    let reminders: [ReminderItem]
+
+    /// 快照所属的视图；与设备当前视图不一致时设备拒收，同步期间切换视图不会显示旧视图的内容。
+    let view: DeviceReminderView
+
+    let reminders: [DeviceSnapshotItem]
     let viewCounts: ReminderViewCounts?
     let currentViewCount: Int?
     let replaceDisplay: Bool?
     let sentAtEpochMs: Int64?
     let alerts: [DeviceAlert]?
+}
+
+/// 快照中的事项只带固件用到的字段，标题、备注等内容不以明文上传。
+struct DeviceSnapshotItem: Codable, Sendable {
+    let syncId: String
+    let appleId: String?
+    let completed: Bool
 }
 
 struct DeviceAlert: Codable, Sendable {
@@ -96,6 +107,10 @@ struct DeviceStatus: Codable, Sendable {
     let height: Int
     var pixelFormat: String?
     var syncRequested: Bool?
+
+    /// 当前同步请求的序号；确认同步时原样回传，设备只清除这一次请求。
+    var syncRequestId: UInt64?
+
     var syncRequestAgeMs: Int?
     var view: DeviceReminderView?
     var selectedIndex: Int?

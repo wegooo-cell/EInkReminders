@@ -47,7 +47,7 @@ constexpr char kNamespace[] = "eink-reminders";
 constexpr TickType_t kSettingsTimeout = pdMS_TO_TICKS(30000);
 constexpr TickType_t kSelectionTimeout = pdMS_TO_TICKS(30000);
 constexpr size_t kPartialRefreshLimit = 8;
-constexpr size_t kSettingsFrameCount = 36;
+constexpr size_t kSettingsFrameCount = 37;
 constexpr size_t kSettingsMenuCount = 10;
 constexpr size_t kViewPickerFrame = 10;
 constexpr size_t kSyncDetailFrame = 14;
@@ -68,6 +68,7 @@ constexpr size_t kNetworkReconfigureFrame = 32;
 constexpr size_t kWifiReconnectingFrame = 33;
 constexpr size_t kWifiReconnectSuccessFrame = 34;
 constexpr size_t kWifiReconnectFailedFrame = 35;
+constexpr size_t kWaitingForMacFrame = 36;
 constexpr char kCaptivePortalUri[] = "http://192.168.4.1/";
 
 extern const uint8_t settings_frames_bin_start[] asm("_binary_settings_frames_bin_start");
@@ -231,6 +232,13 @@ private:
     }
 
     void LoadState() {
+        // 重启后内存中的事项列表、到点提醒和时钟都已清空，屏幕却照常显示缓存的空闲画面。
+        // 启动即请求同步，让 Mac 立即重建这些状态，而不是等到下一个同步周期。
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            MarkSyncRequestedLocked(0);
+        }
+
         nvs_handle_t nvs;
         if (nvs_open(kNamespace, NVS_READONLY, &nvs) != ESP_OK) return;
         nvs_get_u64(nvs, "nextSeq", &next_sequence_);
@@ -239,34 +247,50 @@ private:
             active_view_ = static_cast<ReminderView>(view);
             settings_view_index_ = view;
         }
+
+        // 操作队列存在 blob "opsQueue"；没有时读取旧版本存下的 "operations" 字符串，
+        // 下一次保存队列时迁移为 blob。两种读取都补上结尾的 '\0' 再交给 cJSON。
+        std::vector<char> json;
         size_t length = 0;
-        if (nvs_get_str(nvs, "operations", nullptr, &length) == ESP_OK && length > 1) {
-            std::vector<char> json(length);
-            if (nvs_get_str(nvs, "operations", json.data(), &length) == ESP_OK) {
-                cJSON* root = cJSON_Parse(json.data());
-                cJSON* item = nullptr;
-                cJSON_ArrayForEach(item, root) {
-                    Operation operation;
-                    operation.sequence = Number(item, "sequence");
-                    operation.type = String(item, "type");
-                    operation.sync_id = String(item, "syncId");
-                    operation.apple_id = String(item, "appleId");
-                    operation.completed = Bool(item, "completed");
-                    operation.due_at_epoch_ms = static_cast<int64_t>(Number(item, "dueAtEpochMs"));
-                    if (!operation.type.empty() && !operation.sync_id.empty()) operations_.push_back(std::move(operation));
-                }
-                cJSON_Delete(root);
-            }
+        if (nvs_get_blob(nvs, "opsQueue", nullptr, &length) == ESP_OK && length > 0) {
+            json.assign(length + 1, '\0');
+            if (nvs_get_blob(nvs, "opsQueue", json.data(), &length) != ESP_OK) json.clear();
+        } else if (nvs_get_str(nvs, "operations", nullptr, &length) == ESP_OK && length > 1) {
+            json.assign(length, '\0');
+            if (nvs_get_str(nvs, "operations", json.data(), &length) != ESP_OK) json.clear();
         }
+
+        if (!json.empty()) {
+            cJSON* root = cJSON_Parse(json.data());
+            cJSON* item = nullptr;
+            cJSON_ArrayForEach(item, root) {
+                Operation operation;
+                operation.sequence = Number(item, "sequence");
+                operation.type = String(item, "type");
+                operation.sync_id = String(item, "syncId");
+                operation.apple_id = String(item, "appleId");
+                operation.completed = Bool(item, "completed");
+                operation.due_at_epoch_ms = static_cast<int64_t>(Number(item, "dueAtEpochMs"));
+                if (!operation.type.empty() && !operation.sync_id.empty()) {
+                    operations_.push_back(std::move(operation));
+                }
+            }
+            cJSON_Delete(root);
+        }
+
         nvs_close(nvs);
         if (next_sequence_ == 0) next_sequence_ = 1;
-        if (!operations_.empty()) {
-            sync_requested_ = true;
-            sync_requested_at_us_ = 0;
-        }
     }
 
-    void SaveOperationsLocked() {
+    // 记录一次同步请求。每次请求分配新的序号，Mac 确认时只能清除自己读到的那一次。
+    void MarkSyncRequestedLocked(int64_t requested_at_us) {
+        sync_requested_ = true;
+        sync_requested_at_us_ = requested_at_us;
+        ++sync_request_id_;
+    }
+
+    // 把操作队列写入 NVS，任何一步失败都返回 false。
+    bool SaveOperationsLocked() {
         cJSON* root = cJSON_CreateArray();
         for (const auto& operation : operations_) {
             cJSON* item = cJSON_CreateObject();
@@ -279,15 +303,29 @@ private:
             cJSON_AddItemToArray(root, item);
         }
         char* json = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        if (json == nullptr) return false;
+
+        // 队列整体存为 blob：NVS 字符串上限 4000 字节，队列变长后会超出。
+        // blob 首次写入成功后删除旧版本的 "operations" 字符串。
         nvs_handle_t nvs;
-        if (json && nvs_open(kNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
-            nvs_set_str(nvs, "operations", json);
-            nvs_set_u64(nvs, "nextSeq", next_sequence_);
-            nvs_commit(nvs);
+        esp_err_t err = nvs_open(kNamespace, NVS_READWRITE, &nvs);
+        if (err == ESP_OK) {
+            err = nvs_set_blob(nvs, "opsQueue", json, std::strlen(json));
+            if (err == ESP_OK) err = nvs_set_u64(nvs, "nextSeq", next_sequence_);
+            if (err == ESP_OK) {
+                nvs_erase_key(nvs, "operations");
+                err = nvs_commit(nvs);
+            }
             nvs_close(nvs);
         }
         cJSON_free(json);
-        cJSON_Delete(root);
+
+        if (err != ESP_OK) {
+            ESP_LOGE(kTag, "could not save %u queued operations: %s",
+                     static_cast<unsigned>(operations_.size()), esp_err_to_name(err));
+        }
+        return err == ESP_OK;
     }
 
     bool LoadWifi(std::string* ssid, std::string* password) {
@@ -433,8 +471,7 @@ private:
             ESP_LOGI(kTag, "saved Wi-Fi reconnected in background");
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                sync_requested_ = true;
-                sync_requested_at_us_ = 0;
+                MarkSyncRequestedLocked(0);
             }
             if (ui_mode_ == UiMode::kReminders && !RenderIdleFrame()) {
                 RenderSettingsFrame(kSyncRequestedFrame);
@@ -481,6 +518,11 @@ private:
 
     esp_err_t SendHome(httpd_req_t* req) {
         if (!portal_active_) return SendControlHome(req);
+
+        // 配网时通配 DNS 会把任意域名指向设备。用域名打开的配网页提交 Wi-Fi 时会被写接口的 Host 校验拒绝，
+        // 先跳转到 IP 地址再显示页面。
+        if (!HostIsIpv4(req)) return CaptiveRedirectHandler(req, HTTPD_404_NOT_FOUND);
+
         static constexpr char kPage[] = R"HTML(<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f5f5f7"><title>墨水屏提醒事项 · 网络设置</title>
 <style>
@@ -492,7 +534,11 @@ const strength=rssi=>rssi>=-55?'信号强':rssi>=-68?'信号良好':'信号较�
 function selectNetwork(button,network){document.querySelectorAll('.network').forEach(item=>item.classList.remove('selected'));button.classList.add('selected');ssid.value=network.ssid;selectedSecure=network.secure;passwordField.hidden=!selectedSecure;password.required=selectedSecure;if(!selectedSecure)password.value='';save.disabled=false;result.textContent='';}
 async function scan(){rescan.disabled=true;save.disabled=true;ssid.value='';passwordField.hidden=true;networks.replaceChildren();scanStatus.classList.remove('error');scanStatus.textContent='正在扫描附近网络…';try{const response=await fetch('/api/wifi/scan',{cache:'no-store'});if(!response.ok)throw new Error();const data=await response.json();for(const network of data.networks){const button=document.createElement('button');button.type='button';button.className='network';const name=document.createElement('span');name.textContent=network.ssid;const detail=document.createElement('small');detail.textContent=(network.secure?'需要密码 · ':'开放网络 · ')+strength(network.rssi);button.append(name,detail);button.addEventListener('click',()=>selectNetwork(button,network));networks.append(button)}scanStatus.textContent=data.networks.length?'找到 '+data.networks.length+' 个网络，请选择一个。':'没有找到网络，请靠近路由器后重新扫描。';}catch(error){scanStatus.classList.add('error');scanStatus.textContent='扫描失败，请点击“重新扫描”。';}finally{rescan.disabled=false}}
 reveal.addEventListener('click',()=>{const showing=password.type==='text';password.type=showing?'password':'text';reveal.textContent=showing?'显示':'隐藏'});rescan.addEventListener('click',scan);
-form.addEventListener('submit',async event=>{event.preventDefault();if(!ssid.value)return;save.disabled=true;rescan.disabled=true;result.classList.remove('error');result.textContent='正在验证网络和密码，请稍候…';try{const body=new URLSearchParams({ssid:ssid.value,password:selectedSecure?password.value:''});const response=await fetch('/wifi',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'连接失败');app.innerHTML='<section class="success"><h2>Wi-Fi 已连接</h2><p>墨水屏提醒事项已成功连接家庭网络。</p><div class="address">'+data.ip+'</div><p>请在“墨水屏提醒事项”Mac App 中使用这个设备地址。设备即将自动重启。</p></section>';}catch(error){result.classList.add('error');result.textContent=error.message||'连接失败，请检查密码后重试。';save.disabled=false;rescan.disabled=false;}});
+form.addEventListener('submit',async event=>{event.preventDefault();if(!ssid.value)return;save.disabled=true;rescan.disabled=true;result.classList.remove('error');result.textContent='正在验证网络和密码，请稍候…';try{const body=new URLSearchParams({ssid:ssid.value,password:selectedSecure?password.value:''});const response=await fetch('/wifi',{
+method:'POST',
+headers:{'Content-Type':'application/x-www-form-urlencoded','X-EInk-Reminders':'1'},
+body
+});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.message||'连接失败');app.innerHTML='<section class="success"><h2>Wi-Fi 已连接</h2><p>墨水屏提醒事项已成功连接家庭网络。</p><div class="address">'+data.ip+'</div><p>请在“墨水屏提醒事项”Mac App 中使用这个设备地址。设备即将自动重启。</p></section>';}catch(error){result.classList.add('error');result.textContent=error.message||'连接失败，请检查密码后重试。';save.disabled=false;rescan.disabled=false;}});
 scan();
 </script></body></html>)HTML";
         httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -516,7 +562,11 @@ const q=s=>document.querySelector(s),qa=s=>document.querySelectorAll(s),toast=q(
 function say(message){toast.textContent=message;toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),2200)}
 function busy(value){qa('button[data-action],button[data-view]').forEach(button=>button.disabled=value)}
 async function status(){try{const response=await fetch('/api/device/settings',{cache:'no-store'});if(!response.ok)throw new Error();const data=await response.json();q('#dot').classList.remove('offline');q('#connection').textContent='已连接';q('#address').textContent=data.ip||location.host;for(const name of ['today','scheduled','all','completed'])q('#count-'+name).textContent=data.viewCounts[name]??0;qa('[data-view]').forEach(button=>button.classList.toggle('active',button.dataset.view===data.view));q('#wifi').textContent=data.wifiConnected?(data.ssid+' · '+data.rssi+' dBm'):'未连接';q('#firmware').textContent=data.firmwareVersion;q('#battery').textContent=data.batteryValid?(data.batteryPercent+'%'):'读取中';q('#mac').textContent=data.macOnline?'在线':'未连接';}catch(error){q('#dot').classList.add('offline');q('#connection').textContent='连接中断'}}
-async function act(action,view){busy(true);try{const response=await fetch('/api/device/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,view})});const data=await response.json();if(!response.ok)throw new Error(data.message||'操作失败');say(data.message||'操作已发送');setTimeout(status,900)}catch(error){say(error.message||'设备无响应')}finally{setTimeout(()=>busy(false),700)}}
+async function act(action,view){busy(true);try{const response=await fetch('/api/device/action',{
+method:'POST',
+headers:{'Content-Type':'application/json','X-EInk-Reminders':'1'},
+body:JSON.stringify({action,view})
+});const data=await response.json();if(!response.ok)throw new Error(data.message||'操作失败');say(data.message||'操作已发送');setTimeout(status,900)}catch(error){say(error.message||'设备无响应')}finally{setTimeout(()=>busy(false),700)}}
 qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setView',button.dataset.view)));qa('[data-action]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.confirm&&!confirm(button.dataset.confirm))return;act(button.dataset.action)}));status();setInterval(status,4000);
 </script></body></html>)HTML";
         httpd_resp_set_type(req, "text/html; charset=utf-8");
@@ -534,7 +584,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             std::snprintf(address, sizeof(address), IPSTR, IP2STR(&ip.ip));
         }
         const ZectrixPowerSnapshot power = board_.ReadPowerSnapshot();
-        const bool mac_online = esp_timer_get_time() - last_client_activity_us_.load() < 10000000;
+        const bool mac_online = IsMacOnline();
 
         std::lock_guard<std::mutex> lock(mutex_);
         cJSON* root = cJSON_CreateObject();
@@ -559,6 +609,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t ReceiveDeviceAction(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
         if (portal_active_) return SendError(req, 409, "setup_portal_active");
         std::string body;
         if (!ReadBody(req, &body, 768)) return SendError(req, 400, "invalid_json");
@@ -643,6 +694,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t SaveWifi(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
         if (!portal_active_ || station_netif_ == nullptr) {
             return SendError(req, 409, "setup_portal_inactive");
         }
@@ -706,6 +758,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         cJSON_AddNumberToObject(root, "pageCount", reminder_ids_.size());
         cJSON_AddBoolToObject(root, "localCompletionPending", completion_latched_);
         cJSON_AddBoolToObject(root, "syncRequested", sync_requested_);
+        cJSON_AddNumberToObject(root, "syncRequestId", static_cast<double>(sync_request_id_));
         cJSON_AddBoolToObject(root, "displayRequested", display_requested_);
         cJSON_AddStringToObject(
             root, "view", kReminderViewNames[static_cast<size_t>(active_view_)]);
@@ -720,6 +773,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t ReceiveSnapshot(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
         std::string body;
         if (!ReadBody(req, &body, kMaxBodyBytes)) return SendError(req, 400, "invalid_json");
         cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
@@ -744,6 +798,14 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             incoming_alerts.push_back(std::move(alert));
         }
         std::lock_guard<std::mutex> lock(mutex_);
+
+        // 快照必须属于设备当前的视图：同步期间在设备上切换了视图时，拒绝旧视图的快照，
+        // 否则旧视图的事项会被当作新视图显示。
+        if (String(root, "view") != kReminderViewNames[static_cast<size_t>(active_view_)]) {
+            cJSON_Delete(root);
+            return SendError(req, 409, "view_mismatch");
+        }
+
         if (cJSON_IsArray(alert_items)) alerts_ = std::move(incoming_alerts);
         const int64_t sent_at_epoch_ms = static_cast<int64_t>(Number(root, "sentAtEpochMs"));
         if (sent_at_epoch_ms > 0) {
@@ -773,13 +835,16 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
                 reminder_apple_ids_.push_back(String(item, "appleId"));
             }
         }
-        selected_index_ = 0;
-        selection_visible_ = false;
-        idle_frame_received_since_snapshot_ = false;
-        cached_frame_index_ = kInvalidIndex;
-        confirmation_frame_index_ = kInvalidIndex;
-        display_requested_ = !reminder_ids_.empty();
+
+        // 只有本轮会重传画面时才重置选中状态和帧缓存。只更新提醒或同步请求的快照不会重绘，
+        // 屏幕上的选中背景和已缓存的帧仍然有效，重置会让下一次按键跳回第一项。
         if (replace_display) {
+            selected_index_ = 0;
+            selection_visible_ = false;
+            idle_frame_received_since_snapshot_ = false;
+            cached_frame_index_ = kInvalidIndex;
+            confirmation_frame_index_ = kInvalidIndex;
+            display_requested_ = !reminder_ids_.empty();
             std::remove(IdleFramePath().c_str());
             std::remove(FramePath().c_str());
             std::remove(ConfirmationFramePath().c_str());
@@ -790,6 +855,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t ReceiveDisplay(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
         if (req->content_len != ZECTRIX_EPD_1BPP_FRAME_BYTES) return SendError(req, 400, "expected_15000_bytes");
         char query[96] = {};
         char index_text[8] = {};
@@ -886,6 +952,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t Acknowledge(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
         std::string body;
         if (!ReadBody(req, &body, 1024)) return SendError(req, 400, "invalid_json");
         cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
@@ -907,10 +974,25 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     }
 
     esp_err_t AcknowledgeSync(httpd_req_t* req) {
+        if (!AcceptsWrite(req)) return SendError(req, 403, "forbidden");
+
+        std::string body;
+        if (!ReadBody(req, &body, 256)) return SendError(req, 400, "invalid_json");
+        cJSON* root = cJSON_ParseWithLength(body.data(), body.size());
+        if (!cJSON_IsObject(root)) {
+            cJSON_Delete(root);
+            return SendError(req, 400, "invalid_json");
+        }
+        const uint64_t request_id = Number(root, "requestId");
+        cJSON_Delete(root);
+
         {
+            // 只清除 Mac 同步开始时读到的那一次请求；同步期间设备产生的新请求序号更大，必须保留。
             std::lock_guard<std::mutex> lock(mutex_);
-            sync_requested_ = false;
-            sync_requested_at_us_ = 0;
+            if (request_id == sync_request_id_) {
+                sync_requested_ = false;
+                sync_requested_at_us_ = 0;
+            }
         }
         httpd_resp_set_status(req, "204 No Content");
         return httpd_resp_send(req, nullptr, 0);
@@ -1108,23 +1190,34 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
                 next_sequence_++, completed ? "setCompleted" : "setDueAt",
                 active_alert_.sync_id, active_alert_.apple_id, completed
             };
-            if (completed) {
-                alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
-                    [this](const DueAlert& item) { return item.sync_id == active_alert_.sync_id; }), alerts_.end());
-                completion_latched_ = true;
-                sync_requested_at_us_ = esp_timer_get_time();
-            } else {
+
+            if (!completed) {
                 // Align to a minute so Apple Reminders and the device agree on
                 // the displayed five-minute snooze time.
                 const int64_t five_minutes_later = NowEpochMsLocked() + 5 * 60 * 1000;
                 operation.due_at_epoch_ms = ((five_minutes_later + 59'999) / 60'000) * 60'000;
+            }
+
+            operations_.push_back(operation);
+
+            // 操作存不进 Flash 就不接受：回滚队列并保持弹窗，请求同步让 Mac 取走已排队的操作后再试。
+            if (!SaveOperationsLocked()) {
+                operations_.pop_back();
+                --next_sequence_;
+                MarkSyncRequestedLocked(0);
+                return;
+            }
+
+            if (completed) {
+                alerts_.erase(std::remove_if(alerts_.begin(), alerts_.end(),
+                    [this](const DueAlert& item) { return item.sync_id == active_alert_.sync_id; }), alerts_.end());
+                completion_latched_ = true;
+                MarkSyncRequestedLocked(esp_timer_get_time());
+            } else {
                 active_alert_.due_at_epoch_ms = operation.due_at_epoch_ms;
                 alerts_.push_back(active_alert_);
-                sync_requested_at_us_ = esp_timer_get_time() - 5'000'000;
+                MarkSyncRequestedLocked(esp_timer_get_time() - 5'000'000);
             }
-            operations_.push_back(std::move(operation));
-            SaveOperationsLocked();
-            sync_requested_ = true;
             ui_mode_ = UiMode::kReminders;
             selection_visible_ = false;
         }
@@ -1138,9 +1231,14 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         bool frame_ready = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (reminder_ids_.empty()) return;
             selection_last_activity_ = xTaskGetTickCount();
-            if (!selection_visible_) {
+            if (reminder_ids_.empty()) {
+                // 重启后还没收到快照时列表为空，只有 Mac 能重建。Mac 不在线时提示等待，
+                // 并借用选中状态的超时：无操作 30 秒后照常回到空闲画面。
+                if (IsMacOnline()) return;
+                selection_visible_ = true;
+                reveal_only = true;
+            } else if (!selection_visible_) {
                 selection_visible_ = true;
                 page = std::min(selected_index_, reminder_ids_.size() - 1);
                 reveal_only = true;
@@ -1150,6 +1248,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         }
         if (reveal_only) {
             if (frame_ready) RenderStoredFrame(page);
+            else ShowWaitingForMacIfOffline();
             return;
         }
         if (button == ZectrixButton::kUp) SelectPrevious();
@@ -1172,6 +1271,11 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         }
     }
 
+    // 按键需要的画面只能由 Mac 生成。Mac 不在线时显示等待提示，避免按键没有任何反馈。
+    void ShowWaitingForMacIfOffline() {
+        if (!IsMacOnline()) RenderSettingsFrame(kWaitingForMacFrame);
+    }
+
     void SelectPrevious() {
         size_t page;
         bool frame_ready;
@@ -1184,6 +1288,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             if (!frame_ready) display_requested_ = true;
         }
         if (frame_ready) RenderStoredFrame(page);
+        else ShowWaitingForMacIfOffline();
     }
     void SelectNext() {
         size_t page;
@@ -1197,40 +1302,70 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             if (!frame_ready) display_requested_ = true;
         }
         if (frame_ready) RenderStoredFrame(page);
+        else ShowWaitingForMacIfOffline();
     }
     void CompleteSelected() {
-        size_t confirmed_page;
+        size_t confirmed_page = 0;
         bool preview_ready = false;
-        { std::lock_guard<std::mutex> lock(mutex_);
-          if (active_view_ == ReminderView::kCompleted) return;
-          if (reminder_ids_.empty() || selected_index_ >= reminder_ids_.size()) return;
-          if (confirmation_frame_index_ != selected_index_) {
-              display_requested_ = true;
-              return;
-          }
-          confirmed_page = selected_index_;
-          const std::string& selected_id = reminder_ids_[selected_index_];
-          const bool already_queued = std::any_of(
-              operations_.begin(), operations_.end(),
-              [&selected_id](const Operation& item) {
-                  return item.type == "setCompleted" && item.sync_id == selected_id && item.completed;
-              });
-          if (already_queued) return;
-          const std::string apple_id = selected_index_ < reminder_apple_ids_.size()
-              ? reminder_apple_ids_[selected_index_] : "";
-          Operation operation = {next_sequence_++, "setCompleted", selected_id, apple_id, true};
-          operations_.push_back(operation); SaveOperationsLocked();
-          completion_latched_ = true;
-          sync_requested_ = true;
-          // Debounce the Mac refresh for five seconds after the latest local
-          // completion so several rapid confirmations are applied together.
-          sync_requested_at_us_ = esp_timer_get_time();
-          MoveToAvailableLocked(1);
-          cached_frame_index_ = kInvalidIndex;
-          confirmation_frame_index_ = kInvalidIndex;
-          display_requested_ = true;
-          preview_ready = true;
-          ESP_LOGI(kTag, "queued completion for %s", operation.sync_id.c_str()); }
+        bool waiting_for_mac = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (active_view_ == ReminderView::kCompleted) return;
+            if (reminder_ids_.empty() || selected_index_ >= reminder_ids_.size()) return;
+            if (confirmation_frame_index_ != selected_index_) {
+                display_requested_ = true;
+                waiting_for_mac = true;
+            } else {
+                confirmed_page = selected_index_;
+                const std::string& selected_id = reminder_ids_[selected_index_];
+                const bool already_queued = std::any_of(
+                    operations_.begin(), operations_.end(),
+                    [&selected_id](const Operation& item) {
+                        return item.type == "setCompleted" &&
+                               item.sync_id == selected_id &&
+                               item.completed;
+                    });
+                if (already_queued) return;
+
+                const std::string apple_id = selected_index_ < reminder_apple_ids_.size()
+                    ? reminder_apple_ids_[selected_index_] : "";
+                Operation operation = {
+                    next_sequence_++,
+                    "setCompleted",
+                    selected_id,
+                    apple_id,
+                    true
+                };
+                operations_.push_back(operation);
+
+                // 操作存不进 Flash 就不接受这次完成：回滚队列，并请求同步让 Mac 取走已排队的操作，
+                // 不显示一个断电后会丢失的完成状态。
+                if (!SaveOperationsLocked()) {
+                    operations_.pop_back();
+                    --next_sequence_;
+                    MarkSyncRequestedLocked(0);
+                    waiting_for_mac = true;
+                } else {
+                    completion_latched_ = true;
+
+                    // Debounce the Mac refresh for five seconds after the latest local
+                    // completion so several rapid confirmations are applied together.
+                    MarkSyncRequestedLocked(esp_timer_get_time());
+                    MoveToAvailableLocked(1);
+                    cached_frame_index_ = kInvalidIndex;
+                    confirmation_frame_index_ = kInvalidIndex;
+                    display_requested_ = true;
+                    preview_ready = true;
+                    ESP_LOGI(kTag, "queued completion for %s", operation.sync_id.c_str());
+                }
+            }
+        }
+
+        if (waiting_for_mac) {
+            ShowWaitingForMacIfOffline();
+            return;
+        }
+
         // The Mac keeps one predicted confirmation frame ready for the current
         // selection. This gives immediate local feedback without storing an
         // exponential set of completion combinations on flash.
@@ -1456,6 +1591,12 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
 
     void MarkClientActivity() { last_client_activity_us_.store(esp_timer_get_time()); }
 
+    // Mac App 每秒轮询设备，10 秒内收到过它的请求即视为在线；开机后还没收到过请求时视为离线。
+    bool IsMacOnline() const {
+        const int64_t last_activity_us = last_client_activity_us_.load();
+        return last_activity_us != 0 && esp_timer_get_time() - last_activity_us < 10000000;
+    }
+
     void HandleSettingsBack() {
         if (ui_mode_ == UiMode::kReminders) {
             settings_index_ = 0;
@@ -1622,8 +1763,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
             cached_frame_index_ = kInvalidIndex;
             confirmation_frame_index_ = kInvalidIndex;
             display_requested_ = false;
-            sync_requested_ = true;
-            sync_requested_at_us_ = 0;
+            MarkSyncRequestedLocked(0);
         }
         nvs_handle_t nvs;
         if (nvs_open(kNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
@@ -1642,8 +1782,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     void RequestSync() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            sync_requested_ = true;
-            sync_requested_at_us_ = 0;
+            MarkSyncRequestedLocked(0);
             selection_visible_ = false;
         }
         ui_mode_ = UiMode::kReminders;
@@ -1681,8 +1820,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
                 confirmation_frame_index_ = kInvalidIndex;
                 display_requested_ = false;
                 selection_visible_ = false;
-                sync_requested_ = true;
-                sync_requested_at_us_ = 0;
+                MarkSyncRequestedLocked(0);
             }
             ui_mode_ = UiMode::kReminders;
             RenderSettingsFrame(kCacheClearedFrame);
@@ -1770,7 +1908,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
         }
         std::snprintf(revision, sizeof(revision), "%llu", static_cast<unsigned long long>(snapshot));
         std::snprintf(pending, sizeof(pending), "%u", static_cast<unsigned>(operation_count));
-        const bool online = esp_timer_get_time() - last_client_activity_us_.load() < 10000000;
+        const bool online = IsMacOnline();
         RenderSettingsFrame(kSyncDetailFrame, revision, pending, online ? "ONLINE" : "OFFLINE");
     }
 
@@ -1860,6 +1998,31 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     static std::string FramePath() { return "/spiffs/frame.bin"; }
     static std::string IdleFramePath() { return "/spiffs/idle.bin"; }
     static std::string ConfirmationFramePath() { return "/spiffs/confirm.bin"; }
+
+    // 写接口只接受带 X-EInk-Reminders: 1 请求头、且用 IPv4 地址访问设备的请求。
+    // 自定义请求头让其他网站发起的跨站请求必须先预检，设备不响应预检，浏览器就不会发出；
+    // Host 必须是 IP 地址，挡住用域名重绑定到设备地址的网页。
+    static bool AcceptsWrite(httpd_req_t* req) {
+        char marker[4] = {};
+        if (httpd_req_get_hdr_value_str(req, "X-EInk-Reminders", marker, sizeof(marker)) != ESP_OK ||
+            std::strcmp(marker, "1") != 0) {
+            return false;
+        }
+
+        return HostIsIpv4(req);
+    }
+
+    // 请求的 Host 是否为 IPv4 地址。Host 可能带端口，只取冒号前的部分；
+    // 超过缓冲区的 Host 不可能是 IPv4 地址，直接判为否。
+    static bool HostIsIpv4(httpd_req_t* req) {
+        char host[32] = {};
+        if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) return false;
+        if (char* port = std::strchr(host, ':')) *port = '\0';
+
+        esp_ip4_addr_t address = {};
+        return esp_netif_str_to_ip4(host, &address) == ESP_OK;
+    }
+
     static bool ReadBody(httpd_req_t* req, std::string* body, size_t maximum) {
         if (req->content_len <= 0 || static_cast<size_t>(req->content_len) > maximum) return false;
         body->resize(req->content_len);
@@ -1958,6 +2121,7 @@ qa('[data-view]').forEach(button=>button.addEventListener('click',()=>act('setVi
     ConfirmAction confirm_action_ = ConfirmAction::kRestart;
     bool confirm_selected_ = false;
     bool sync_requested_ = false;
+    uint64_t sync_request_id_ = 0;
     int64_t sync_requested_at_us_ = 0;
     std::atomic<int64_t> last_client_activity_us_{0};
     std::atomic<int> pending_web_action_{static_cast<int>(WebAction::kNone)};
