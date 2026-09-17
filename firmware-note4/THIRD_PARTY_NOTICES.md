@@ -21,9 +21,3 @@ licenses. It is a build dependency and is not copied into this project.
 The audio codec abstraction is obtained through ESP-IDF Component Manager as
 `espressif/esp_codec_dev`. Its license file is delivered with the downloaded
 component in `managed_components/espressif__esp_codec_dev/LICENSE`.
-
-## Demonstration artwork
-
-The lighthouse, snowy-path and mountain images in `main/assets` were created
-for the Zectrix hardware demonstration and are distributed with this project
-under the project MIT License by Zectrix Lab.
