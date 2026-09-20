@@ -17,5 +17,27 @@ python3 -m http.server 4184 --directory dist
 
 ## 固件
 
-网页使用 `dist/firmware/eink-reminders-note4.bin`，它是从 ESP-IDF 构建结果合并得到的完整
-ESP32-S3 镜像，写入偏移为 `0x0`。此固件仅适用于黑白版 NOTE4，不适用于 NOTE4C。
+`dist/firmware/manifest.json` 把 v1.0.0 固件分三段写入，不覆盖 `0x9000` 起的 NVS 分区：
+
+| 文件 | 写入偏移 |
+| --- | --- |
+| `bootloader-v1.0.0.bin` | `0x0` |
+| `partition-table-v1.0.0.bin` | `0x8000` |
+| `eink-reminders-note4-app-v1.0.0.bin` | `0x10000` |
+
+刷机时不勾选“清除设备”，设备会保留：
+
+- 已保存的 Wi-Fi
+- 待同步的操作
+- 视图选择
+
+三段文件从 Release 附件 `eink-reminders-note4-v1.0.0.bin` 原样切出。
+
+此固件仅适用于黑白版 NOTE4，不适用于 NOTE4C。
+
+## 刷机组件
+
+`dist/vendor/esp-web-tools/10.4.0/` 自托管固定版本的 [ESP Web Tools](https://github.com/esphome/esp-web-tools)：
+
+- 内容：npm 包中的 `dist/web` 构建产物
+- 许可证：Apache-2.0，见同目录 `LICENSE`
