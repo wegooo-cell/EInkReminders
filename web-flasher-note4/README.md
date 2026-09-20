@@ -17,13 +17,13 @@ python3 -m http.server 4184 --directory dist
 
 ## 固件
 
-`dist/firmware/manifest.json` 把 v1.0.0 固件分三段写入，不覆盖 `0x9000` 起的 NVS 分区：
+`dist/firmware/manifest.json` 把 v1.0.1 固件分三段写入，不覆盖 `0x9000` 起的 NVS 分区：
 
 | 文件 | 写入偏移 |
 | --- | --- |
-| `bootloader-v1.0.0.bin` | `0x0` |
-| `partition-table-v1.0.0.bin` | `0x8000` |
-| `eink-reminders-note4-app-v1.0.0.bin` | `0x10000` |
+| `bootloader-v1.0.1.bin` | `0x0` |
+| `partition-table-v1.0.1.bin` | `0x8000` |
+| `eink-reminders-note4-app-v1.0.1.bin` | `0x10000` |
 
 刷机时不勾选“清除设备”，设备会保留：
 
@@ -31,7 +31,7 @@ python3 -m http.server 4184 --directory dist
 - 待同步的操作
 - 视图选择
 
-三段文件从 Release 附件 `eink-reminders-note4-v1.0.0.bin` 原样切出。
+三段文件从 Release 附件 `eink-reminders-note4-v1.0.1.bin` 原样切出。
 
 此固件仅适用于黑白版 NOTE4，不适用于 NOTE4C。
 

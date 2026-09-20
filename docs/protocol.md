@@ -19,7 +19,7 @@ Mac 主动访问 ZECTRIX NOTE4，避免 macOS 防火墙入站配置。所有路�
 ```json
 {
   "deviceId": "a1b2c3d4e5f6",
-  "firmwareVersion": "1.0.0-note4",
+  "firmwareVersion": "1.0.1-note4",
   "revision": 1789000000000,
   "operationCount": 1,
   "selectedIndex": 2,

@@ -18,7 +18,8 @@ struct ContentView: View {
     }
 
     private var settingsPanel: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Label("墨水屏提醒事项", systemImage: "checklist")
                     .font(.title2.bold())
@@ -123,11 +124,61 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
+            if let failure = model.syncFailure {
+                VStack(alignment: .leading, spacing: 7) {
+                    Label(failure.title, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.red)
+                    Text(failure.reason)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("建议：\(failure.suggestion)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let technicalDetail = failure.technicalDetail {
+                        Text("技术信息：\(technicalDetail)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.red.opacity(0.07))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(Color.red.opacity(0.22))
+                )
+            }
+
+            // 写回失败的设备操作会保存在 Mac 并自动重试，不因设备队列确认而丢失。
+            if let latest = model.deferredOperations.last {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("\(model.deferredOperations.count) 项操作等待重试")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Text("下次同步自动重试")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(latest.message)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
 
             Text("NOTE4：上/下选择 · OK 确认 · 长按上键设置")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
         }
     }
 

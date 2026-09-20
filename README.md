@@ -5,7 +5,7 @@
   <p>
     <a href="https://wegooo-cell.github.io/EInkReminders/"><strong>浏览器刷机</strong></a>
     ·
-    <a href="https://github.com/wegooo-cell/EInkReminders/releases/tag/v1.0.0"><strong>下载 v1.0.0</strong></a>
+    <a href="https://github.com/wegooo-cell/EInkReminders/releases/tag/v1.0.1"><strong>下载 v1.0.1</strong></a>
     ·
     <a href="docs/user-manual.md"><strong>中文说明书</strong></a>
   </p>
@@ -13,7 +13,7 @@
     <img alt="ZECTRIX NOTE4" src="https://img.shields.io/badge/设备-ZECTRIX_NOTE4-111111">
     <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-111111">
     <img alt="ESP-IDF 5.4+" src="https://img.shields.io/badge/ESP--IDF-5.4%2B-111111">
-    <img alt="Release v1.0.0" src="https://img.shields.io/badge/Release-v1.0.0-0071e3">
+    <img alt="Release v1.0.1" src="https://img.shields.io/badge/Release-v1.0.1-0071e3">
   </p>
 </div>
 
@@ -95,6 +95,7 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 | 局部刷新 | 选择移动等小范围变化局部刷新，累计 8 次后自动全刷清理残影 |
 | 清晰文字 | Mac 端高分辨率渲染后转换为 1-bit，减少中文笔画锯齿 |
 | 离线操作队列 | 断网时先保存完成操作，Mac 成功写回并确认后才从设备队列清除 |
+| 可诊断同步错误 | Mac App 区分 IP 变化、网络超时、权限、协议与存储错误，并给出具体处理建议 |
 
 ### 视图规则
 
@@ -145,9 +146,9 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 
 | 下载内容 | 地址 |
 | --- | --- |
-| macOS App v1.0.0 | [EInkReminders-macOS-v1.0.0.zip](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.0/EInkReminders-macOS-v1.0.0.zip) |
-| NOTE4 完整固件 v1.0.0 | [eink-reminders-note4-v1.0.0.bin](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.0/eink-reminders-note4-v1.0.0.bin) |
-| SHA-256 校验文件 | [SHA256SUMS-v1.0.0.txt](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.0/SHA256SUMS-v1.0.0.txt) |
+| macOS App v1.0.1 | [EInkReminders-macOS-v1.0.1.zip](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/EInkReminders-macOS-v1.0.1.zip) |
+| NOTE4 完整固件 v1.0.1 | [eink-reminders-note4-v1.0.1.bin](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/eink-reminders-note4-v1.0.1.bin) |
+| SHA-256 校验文件 | [SHA256SUMS-v1.0.1.txt](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/SHA256SUMS-v1.0.1.txt) |
 
 Mac App 要求 macOS 13 或更高版本。首次打开：
 
@@ -193,13 +194,14 @@ NOTE4 只有在没有保存 Wi-Fi，或在设备设置或手机控制页中选�
     macOS/                SwiftUI + EventKit macOS 同步应用
     web-flasher-note4/    GitHub Pages 浏览器刷机与产品介绍页
     docs/                 使用说明、通信协议和硬件说明
-    release/              v1.0.0 固件、Mac App 与校验文件
+    release/              固件、Mac App 与校验文件
 
 进一步阅读：
 
 - [完整中文说明书](docs/user-manual.md)
 - [NOTE4 固件说明](docs/zectrix-note4.md)
 - [局域网同步协议](docs/protocol.md)
+- [v1.0.1 发布说明](RELEASE_NOTES_v1.0.1.md)
 - [v1.0.0 发布说明](RELEASE_NOTES_v1.0.0.md)
 - [浏览器刷机页](https://wegooo-cell.github.io/EInkReminders/)
 

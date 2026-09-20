@@ -1,21 +1,21 @@
 {
   "name": "墨水屏提醒事项（ZECTRIX NOTE4）",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "bootloader-v1.0.0.bin",
+          "path": "bootloader-v1.0.1.bin",
           "offset": 0
         },
         {
-          "path": "partition-table-v1.0.0.bin",
+          "path": "partition-table-v1.0.1.bin",
           "offset": 32768
         },
         {
-          "path": "eink-reminders-note4-app-v1.0.0.bin",
+          "path": "eink-reminders-note4-app-v1.0.1.bin",
           "offset": 65536
         }
       ]

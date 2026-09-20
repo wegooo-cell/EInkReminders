@@ -123,7 +123,6 @@ struct DeviceOperationsResponse: Codable, Sendable {
 
 struct DeviceOperation: Codable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case create
         case setCompleted
         case setDueAt
     }
@@ -132,13 +131,26 @@ struct DeviceOperation: Codable, Identifiable, Sendable {
     let type: Kind
     let syncId: String
     var appleId: String?
-    var title: String?
-    var notes: String?
-    var dueAt: Date?
     var dueAtEpochMs: Int64?
     var completed: Bool?
 
     var id: UInt64 { sequence }
+}
+
+/// 暂时无法写回 Apple 提醒事项的设备操作。Mac 会持久化保存并在后续同步中继续重试，
+/// 因此一条失败操作不会卡住后续同步，也不会因为确认设备队列而丢失。
+struct DeferredOperation: Codable, Sendable {
+    let operation: DeviceOperation
+    var message: String
+    var attempts: Int
+}
+
+/// 面向用户的同步诊断。除了错误标题，还明确说明发生位置与下一步处理办法。
+struct SyncFailure: Sendable {
+    let title: String
+    let reason: String
+    let suggestion: String
+    let technicalDetail: String?
 }
 
 enum WireCoding {

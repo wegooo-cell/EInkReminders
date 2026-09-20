@@ -1,0 +1,2 @@
+dd7956895e4b8c4b104dfe11cab54b4c9d165ff0465a39b5ed08937fa3b097a0  eink-reminders-note4-v1.0.1.bin
+d7aeecd99936271dea001d47b06dadbce6b169de3329dc1687b785ff0d35857b  EInkReminders-macOS-v1.0.1.zip

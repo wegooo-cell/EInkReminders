@@ -1,6 +1,6 @@
 # 墨水屏提醒事项 · 使用说明书
 
-适用版本：Mac App 1.0.0 / ZECTRIX NOTE4 黑白版固件 1.0.0
+适用版本：Mac App 1.0.1 / ZECTRIX NOTE4 黑白版固件 1.0.1
 适用系统：macOS 13 或更新版本、iPhone/iPad 的 Apple“提醒事项”
 
 ## 1. 先理解系统怎样工作

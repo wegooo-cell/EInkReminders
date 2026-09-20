@@ -35,7 +35,7 @@
 namespace {
 
 constexpr char kTag[] = "eink_reminders";
-constexpr char kFirmwareVersion[] = "1.0.0-note4";
+constexpr char kFirmwareVersion[] = "1.0.1-note4";
 constexpr char kNfcRemindersUrl[] = "https://www.icloud.com.cn/reminders/";
 constexpr uint8_t kNfcUrlVersion = 2;
 constexpr int kAlertWidth = 280;
