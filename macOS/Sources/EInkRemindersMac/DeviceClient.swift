@@ -40,6 +40,10 @@ struct DeviceClient: Sendable {
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue(String(index), forHTTPHeaderField: "X-Page-Index")
+
+        // 设备的写接口要求此请求头，用来拦截网页发起的跨站请求。
+        request.setValue("1", forHTTPHeaderField: "X-EInk-Reminders")
+
         request.timeoutInterval = 20
         let (data, response) = try await session.upload(for: request, from: display)
         try validate(response, data: data, endpoint: "/api/display?index=\(index)&state=\(state.rawValue)")
@@ -49,12 +53,9 @@ struct DeviceClient: Sendable {
         try await postJSON(["through": sequence], path: "api/operations/ack")
     }
 
-    func acknowledgeSyncRequest() async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/sync/ack"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 20
-        let (data, response) = try await session.data(for: request)
-        try validate(response, data: data, endpoint: "/api/sync/ack")
+    /// 确认一次同步请求；`id` 是同步开始时从状态接口读到的请求序号。
+    func acknowledgeSyncRequest(id: UInt64?) async throws {
+        try await postJSON(["requestId": id], path: "api/sync/ack")
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -67,6 +68,10 @@ struct DeviceClient: Sendable {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // 设备的写接口要求此请求头，用来拦截网页发起的跨站请求。
+        request.setValue("1", forHTTPHeaderField: "X-EInk-Reminders")
+
         request.httpBody = try WireCoding.encoder().encode(value)
         request.timeoutInterval = 20
         let (data, response) = try await session.data(for: request)

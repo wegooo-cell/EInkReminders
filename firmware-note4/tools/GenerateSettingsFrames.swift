@@ -306,7 +306,13 @@ frames.append(messageFrame(
     footer: "OK 返回网络设置 · 长按上键返回"
 ))
 
-precondition(frames.count == 36)
+// Mac 不在线时，列表按键需要的选中帧和确认帧都无法生成，固件显示这一帧作为兜底反馈。
+frames.append(messageFrame(
+    title: "等待 Mac 连接", detail: "Mac App 在线后，按键选择和完成才会生效",
+    footer: "稍后自动返回提醒事项 · 长按上键设置"
+))
+
+precondition(frames.count == 37)
 let output = frames.reduce(into: Data()) { $0.append($1) }
 precondition(output.count == frames.count * frameBytes)
 let destination = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "main/settings_frames.bin")
