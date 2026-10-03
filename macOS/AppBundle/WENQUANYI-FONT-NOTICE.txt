@@ -1,0 +1,12 @@
+WenQuanYi Bitmap Song 16px
+
+Font copyright: WenQuanYi Board of Trustees, FangQ, and Firefly.
+The font is distributed under GNU General Public License version 2 with
+the original project's additional document-embedding permission.
+
+Source and complete license text:
+https://github.com/AmusementClub/WenQuanYi-Bitmap-Song-TTF
+https://github.com/AmusementClub/WenQuanYi-Bitmap-Song-TTF/blob/master/LICENSE
+
+This font is used only to rasterize small StandBy labels on the Mac. The
+firmware contains bitmap results, not the TTF font.

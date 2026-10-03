@@ -52,7 +52,7 @@ final class ReminderStore {
                 alertCandidates = await fetchIncomplete(in: list)
             }
 
-        case .today, .scheduled, .all:
+        case .today, .all, .planned, .calendar:
             let incomplete = await fetchIncomplete(in: list)
             if includeAlertCandidates { alertCandidates = incomplete }
 
@@ -62,24 +62,31 @@ final class ReminderStore {
                 visibleItems = incomplete.filter {
                     Self.belongsToToday($0, now: now, calendar: calendar)
                 }
-            case .scheduled:
-                visibleItems = incomplete.filter { $0.dueAt != nil }
-            case .all:
+            case .all, .calendar:
                 visibleItems = incomplete
-            case .completed:
+            case .planned:
+                visibleItems = incomplete.filter { $0.dueAt != nil }
+                    .sorted { ($0.dueAt ?? .distantFuture) < ($1.dueAt ?? .distantFuture) }
+            case .completed, .notes:
                 visibleItems = []
             }
             totalCount = visibleItems.count
 
-            // Today and Scheduled are intentionally bounded so the device remains
+            // Today is intentionally bounded so the device remains
             // quick even when the Apple list is very large. The All view has no
             // application-level item cap and is served on demand.
-            let boundedItems = view == .all
+            let boundedItems = view == .all || view == .planned || view == .calendar
                 ? visibleItems
                 : Array(visibleItems.prefix(20))
             items = view == .today
                 ? Self.orderedLikeTodayScreen(boundedItems, now: now)
                 : boundedItems
+
+        case .notes:
+            // Notes are intentionally fetched by NotesStore only after the
+            // user enters that view. EventKit is not touched for this branch.
+            items = []
+            totalCount = 0
         }
 
         // An empty Today view may mean its work was finished. Check completed
@@ -110,8 +117,9 @@ final class ReminderStore {
         }
 
         guard let reminder = eventStore.calendarItem(withIdentifier: appleId) as? EKReminder else {
-            // 提醒已被删除，或标识因 iCloud 全量重同步而失效：这条映射不会再用到。
-            identities.remove(appleId: appleId)
+            // An iCloud identity can be temporarily unavailable during a
+            // resync. Keep the mapping so the queued device edit is retried
+            // instead of silently acknowledging and losing the snooze.
             throw StoreError.reminderNotFound(operation.syncId)
         }
 
@@ -133,14 +141,39 @@ final class ReminderStore {
             }
 
             let date = Date(timeIntervalSince1970: TimeInterval(dueAtEpochMs) / 1_000)
-            reminder.dueDateComponents = Calendar.current.dateComponents(
-                [.year, .month, .day, .hour, .minute], from: date
-            )
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = .current
+            let previousDue = reminder.dueDateComponents.flatMap { calendar.date(from: $0) }
+            // The device may replay an unacknowledged edit. Do not shift
+            // alarms twice when the due date was already saved by EventKit.
+            if let previousDue, abs(previousDue.timeIntervalSince(date)) < 30 { return }
+
+            var due = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+            due.calendar = calendar
+            due.timeZone = calendar.timeZone
+            reminder.dueDateComponents = due
+
+            if let previousDue {
+                let shift = date.timeIntervalSince(previousDue)
+                for alarm in reminder.alarms ?? [] {
+                    if let original = alarm.absoluteDate {
+                        alarm.absoluteDate = original.addingTimeInterval(shift)
+                    }
+                }
+            }
         }
 
         // 保存失败（例如列表只读）时带上标题，界面提示能看出是哪一项没有写回。
         do {
             try eventStore.save(reminder, commit: true)
+            if operation.type == .setDueAt, let target = operation.dueAtEpochMs {
+                guard let saved = eventStore.calendarItem(withIdentifier: appleId) as? EKReminder,
+                      let components = saved.dueDateComponents,
+                      let savedDate = Calendar.current.date(from: components),
+                      abs(savedDate.timeIntervalSince1970 * 1_000 - Double(target)) < 30_000 else {
+                    throw StoreError.invalidDueDate
+                }
+            }
         } catch {
             throw StoreError.saveFailed(title: reminder.title ?? "未命名事项", underlying: error)
         }

@@ -56,7 +56,7 @@ final class DisplayRendererTests: XCTestCase {
             ),
             .allCompleted
         )
-        for view in [DeviceReminderView.scheduled, .all, .completed] {
+        for view in [DeviceReminderView.notes, .all, .completed] {
             XCTAssertEqual(
                 ReminderEmptyState.resolve(
                     view: view,
@@ -77,14 +77,76 @@ final class DisplayRendererTests: XCTestCase {
         let suiteName = "EInkRemindersEventSync-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: "automaticSync")
-        defaults.set(AutomaticSyncInterval.oneHour.rawValue, forKey: "automaticSyncInterval")
-
         let model = AppModel(defaults: defaults)
         model.deviceURL = "%"
         NotificationCenter.default.post(name: .EKEventStoreChanged, object: nil)
         try await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertEqual(model.statusText, "设备地址无效")
+        XCTAssertEqual(model.statusText, "同步失败：设备地址无效")
+    }
+
+    @MainActor
+    func testMissedEventKitNotificationIsDetectedFromLocalSnapshot() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let newItem = ReminderItem(
+            syncId: "from-iphone", title: "iPhone 新事项",
+            dueAt: now.addingTimeInterval(3600), hasDueTime: true,
+            completed: false, priority: 0, updatedAt: now
+        )
+        let snapshot = ReminderViewSnapshot(
+            items: [newItem], totalCount: 1,
+            emptyState: .noItems, alertCandidates: [newItem]
+        )
+        XCTAssertTrue(AppModel.hasMissedReminderChanges(
+            snapshot, renderedItems: [], renderedCount: 0,
+            renderedEmptyState: .noItems, alertSignatures: [], now: now
+        ))
+        let signature = "from-iphone|\(Int64(newItem.dueAt!.timeIntervalSince1970 * 1_000))|iPhone 新事项"
+        XCTAssertFalse(AppModel.hasMissedReminderChanges(
+            snapshot, renderedItems: [newItem], renderedCount: 1,
+            renderedEmptyState: .noItems, alertSignatures: [signature], now: now
+        ))
+    }
+
+    func testStandbyTextPatchesHaveNativeBitmaps() throws {
+        let title = try ZectrixDisplayRenderer.renderStandbyTitlePatch("写视频脚本")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 23, hour: 13))!
+        let dueAt = calendar.date(from: DateComponents(year: 2026, month: 9, day: 23, hour: 14, minute: 30))!
+        let due = try ZectrixDisplayRenderer.renderStandbyDuePatch(dueAt, now: now)
+        XCTAssertEqual(title.count, 112 * 22 / 8)
+        XCTAssertEqual(due.count, 112 * 22 / 8)
+        XCTAssertTrue(title.contains { $0 != 0xFF })
+        XCTAssertTrue(due.contains { $0 != 0xFF })
+        if let directory = ProcessInfo.processInfo.environment["EINK_STANDBY_PATCH_PREVIEW_DIR"] {
+            let url = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try title.write(to: url.appendingPathComponent("standby-title.bin"))
+            try due.write(to: url.appendingPathComponent("standby-due.bin"))
+        }
+    }
+
+    func testPhotoStandbyWeatherAndReminderPatchesMatchFirmwareSizes() throws {
+        let weather = try ZectrixDisplayRenderer.renderWeatherPatch(city: "广州", celsius: 29)
+        let longWeather = try ZectrixDisplayRenderer.renderWeatherPatch(city: "San Francisco", celsius: -12)
+        let reminder = try ZectrixDisplayRenderer.renderPhotoReminderPatch("写视频脚本")
+        XCTAssertEqual(weather.count, 190 * 140 / 8)
+        XCTAssertEqual(longWeather.count, weather.count)
+        XCTAssertEqual(reminder.count, 184 * 22 / 8)
+        XCTAssertTrue(weather.contains { $0 != 0 })
+        XCTAssertTrue(reminder.contains { $0 != 0xFF })
+        if let directory = ProcessInfo.processInfo.environment["EINK_PHOTO_STANDBY_PATCH_DIR"] {
+            let base = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            try weather.write(to: base.appendingPathComponent("weather.bin"))
+            try reminder.write(to: base.appendingPathComponent("reminder.bin"))
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+            let now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 23, hour: 13))!
+            let dueAt = calendar.date(from: DateComponents(year: 2026, month: 9, day: 23, hour: 14, minute: 30))!
+            let due = try ZectrixDisplayRenderer.renderStandbyDuePatch(dueAt, now: now)
+            try due.write(to: base.appendingPathComponent("due.bin"))
+        }
     }
 
     func testTomorrowMorningIsNotClassifiedAsTodayAtNight() {
@@ -149,7 +211,7 @@ final class DisplayRendererTests: XCTestCase {
             item("明天", day: 13, hour: 9),
             item("后天", day: 14, hour: 15)
         ]
-        for view in [DeviceReminderView.scheduled, .all] {
+        for view in [DeviceReminderView.all] {
             XCTAssertNotEqual(
                 try ZectrixDisplayRenderer.render([today], view: view, generatedAt: now),
                 try ZectrixDisplayRenderer.render(items, view: view, generatedAt: now)
@@ -361,11 +423,11 @@ final class DisplayRendererTests: XCTestCase {
         XCTAssertEqual(period(17), .evening)
     }
 
-    func testAutomaticSyncIntervalsMatchTheUserChoices() {
-        XCTAssertEqual(
-            AutomaticSyncInterval.allCases.map(\.title),
-            ["30 秒", "1 分钟", "10 分钟", "30 分钟", "1 小时"]
-        )
+    func testNotesRendererUsesNativeFrameSize() throws {
+        let data = try ZectrixDisplayRenderer.renderNotesList([
+            NoteSummary(id: "1", title: "项目资料", modifiedLabel: "今天")
+        ])
+        XCTAssertEqual(data.count, 15_000)
     }
 
     func testSelectedRowStaysVisibleAfterFiveLocalCompletions() throws {
@@ -463,11 +525,57 @@ final class DisplayRendererTests: XCTestCase {
             item("meeting", "明天项目会议", day: 16, hour: 11),
             item("dentist", "预约牙医", day: 18, hour: 15),
             item("trip", "整理旅行清单", day: 20, hour: nil)
-        ], view: .scheduled)
+        ], view: .all)
         try export("preview-completed.png", reminders: [
             item("done-1", "提交项目方案", day: 15, hour: 10, completed: true),
             item("done-2", "回复客户邮件", day: 15, hour: 11, completed: true),
             item("done-3", "更新工作日志", day: 15, hour: 17, completed: true)
         ], view: .completed)
+    }
+
+    func testExportApprovalTodayPreviewWhenRequested() throws {
+        guard let directory = ProcessInfo.processInfo.environment["EINK_NOTE4_APPROVAL_PREVIEW_DIR"] else { return }
+        let calendar = Calendar.current
+        let now = Date()
+        let start = calendar.startOfDay(for: now)
+        let titles = ["上午·提交项目方案", "下午·写视频脚本", "今晚·整理资料"]
+        let hours = [10, 14, 20]
+        let reminders = zip(titles, hours).enumerated().map { index, pair in
+            ReminderItem(
+                syncId: "approval-\(index)", title: pair.0,
+                dueAt: calendar.date(byAdding: .hour, value: pair.1, to: start),
+                hasDueTime: true, completed: false, priority: 0, updatedAt: now
+            )
+        }
+        let image = try ZectrixDisplayRenderer.previewImage([reminders[1]], view: .today, generatedAt: now)
+        let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
+        let destination = URL(fileURLWithPath: directory).appendingPathComponent("03-today-sections.png")
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try png.write(to: destination)
+        let populated = try ZectrixDisplayRenderer.previewImage(reminders, view: .today, generatedAt: now)
+        let populatedPNG = NSBitmapImageRep(cgImage: populated).representation(using: .png, properties: [:])!
+        try populatedPNG.write(to: URL(fileURLWithPath: directory).appendingPathComponent("03b-today-populated.png"))
+
+        func exportCalendar(_ name: String, monthOffset: Int, selectedDay: Int) throws {
+            let packed = try ZectrixDisplayRenderer.renderCalendar(
+                reminders, monthOffset: monthOffset, selectedDay: selectedDay,
+                selectingDay: true, dayDetail: false, detailPage: 0, generatedAt: now
+            )
+            let bits = [UInt8](packed)
+            let pixels = (0..<(400 * 300)).map { bit -> UInt8 in
+                bits[bit / 8] & UInt8(0x80 >> (bit % 8)) == 0 ? 0 : 255
+            }
+            let provider = CGDataProvider(data: Data(pixels) as CFData)!
+            let image = CGImage(width: 400, height: 300, bitsPerComponent: 8,
+                                bitsPerPixel: 8, bytesPerRow: 400,
+                                space: CGColorSpaceCreateDeviceGray(),
+                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                                provider: provider, decode: nil, shouldInterpolate: false,
+                                intent: .defaultIntent)!
+            let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
+            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
+        }
+        try exportCalendar("07-calendar-last-day.png", monthOffset: 0, selectedDay: 30)
+        try exportCalendar("08-calendar-next-month.png", monthOffset: 1, selectedDay: 1)
     }
 }

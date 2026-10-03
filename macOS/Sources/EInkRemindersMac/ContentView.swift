@@ -69,21 +69,12 @@ struct ContentView: View {
 
                 Divider()
 
-                Toggle("自动同步", isOn: $model.automaticSync)
-                HStack {
-                    Text("同步周期")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker("同步周期", selection: $model.automaticSyncInterval) {
-                        ForEach(AutomaticSyncInterval.allCases) { interval in
-                            Text(interval.title).tag(interval)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 116)
-                    .disabled(!model.automaticSync)
-                }
+                Label("事件触发同步", systemImage: "bolt.horizontal.circle")
+                    .font(.callout.weight(.semibold))
+                Text("提醒事项变化或 NOTE4 按键操作时立即同步；空闲时每 5 秒在 Mac 本地核对变化，不轮询设备。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(14)
             .background(
@@ -178,6 +169,15 @@ struct ContentView: View {
             Text("NOTE4：上/下选择 · OK 确认 · 长按上键设置")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            HStack(spacing: 4) {
+                Text("天气数据：")
+                Link("Open-Meteo", destination: URL(string: "https://open-meteo.com/")!)
+                Text("·")
+                Link("MET Norway", destination: URL(string: "https://api.met.no/")!)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
             }
         }
     }
@@ -207,7 +207,8 @@ struct ContentView: View {
                 emptyState: model.emptyState,
                 isSyncing: model.isSyncing,
                 displayWidth: model.displayWidth,
-                displayHeight: model.displayHeight
+                displayHeight: model.displayHeight,
+                notes: model.notes
             )
 
             HStack {
@@ -228,11 +229,13 @@ struct EInkDisplayViewport: View {
     let isSyncing: Bool
     let displayWidth: Int
     let displayHeight: Int
+    let notes: [NoteSummary]
 
     private var preview: CGImage? {
-        try? ZectrixDisplayRenderer.previewImage(
-            reminders, view: view, emptyState: emptyState
-        )
+        if view == .notes {
+            return try? ZectrixDisplayRenderer.previewNotes(notes)
+        }
+        return try? ZectrixDisplayRenderer.previewImage(reminders, view: view, emptyState: emptyState)
     }
 
     private var aspectRatio: CGFloat {
@@ -244,11 +247,15 @@ struct EInkDisplayViewport: View {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [Color(nsColor: .darkGray), .black],
+                        colors: [Color.white, Color(nsColor: .controlBackgroundColor)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.black.opacity(0.10), lineWidth: 1)
+                }
 
             ZStack {
                 Color.white
@@ -259,7 +266,11 @@ struct EInkDisplayViewport: View {
                         .aspectRatio(aspectRatio, contentMode: .fit)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.black.opacity(0.16), lineWidth: 2)
+            }
             .padding(18)
 
             if isSyncing {
@@ -276,7 +287,7 @@ struct EInkDisplayViewport: View {
             }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
-        .shadow(color: .black.opacity(0.20), radius: 18, y: 8)
+        .shadow(color: .black.opacity(0.13), radius: 18, y: 8)
         .accessibilityLabel("墨水屏提醒事项预览")
     }
 }

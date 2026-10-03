@@ -1,25 +1,6 @@
+import AppKit
 import EventKit
 import Foundation
-
-enum AutomaticSyncInterval: Int, CaseIterable, Identifiable {
-    case thirtySeconds = 30
-    case oneMinute = 60
-    case tenMinutes = 600
-    case thirtyMinutes = 1800
-    case oneHour = 3600
-
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .thirtySeconds: return "30 秒"
-        case .oneMinute: return "1 分钟"
-        case .tenMinutes: return "10 分钟"
-        case .thirtyMinutes: return "30 分钟"
-        case .oneHour: return "1 小时"
-        }
-    }
-}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -32,7 +13,11 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var selectedCalendarId: String? {
-        didSet { defaults.set(selectedCalendarId, forKey: Keys.calendarId) }
+        didSet {
+            defaults.set(selectedCalendarId, forKey: Keys.calendarId)
+            lastRenderedItems = nil
+            lastRenderedCalendarState = nil
+        }
     }
     @Published private(set) var calendars: [(id: String, title: String)] = []
     @Published private(set) var reminders: [ReminderItem] = []
@@ -42,54 +27,51 @@ final class AppModel: ObservableObject {
     @Published private(set) var statusText = "尚未同步"
     @Published private(set) var isSyncing = false
     @Published private(set) var syncFailure: SyncFailure?
+    @Published private(set) var notes: [NoteSummary] = []
+    @Published private(set) var openedNote: NoteDocument?
+    @Published private(set) var openedNotePage = 0
 
     /// 暂时没能写回 Apple 提醒事项的操作。持久化保存，并在每次同步时自动重试。
     @Published private(set) var deferredOperations: [DeferredOperation] = []
 
     @Published private(set) var displayWidth = ZectrixDisplayRenderer.width
     @Published private(set) var displayHeight = ZectrixDisplayRenderer.height
-    @Published var automaticSync: Bool {
-        didSet {
-            defaults.set(automaticSync, forKey: Keys.automaticSync)
-            configureAutomaticSyncTimer()
-        }
-    }
-    @Published var automaticSyncInterval: AutomaticSyncInterval {
-        didSet {
-            defaults.set(automaticSyncInterval.rawValue, forKey: Keys.automaticSyncInterval)
-            configureAutomaticSyncTimer()
-        }
-    }
-
     private let defaults: UserDefaults
     private let reminderStore: ReminderStore
-    private var timer: Timer?
-    private var deviceRequestTimer: Timer?
+    private let notesStore = NotesStore()
+    private var wakeListener: DeviceWakeListener?
     private var changeObserver: NSObjectProtocol?
 
     /// 系统日期变化的通知观察者，跨过午夜后触发同步。
     private var dayChangeObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
 
     private var reminderChangeSyncTask: Task<Void, Never>?
+    private var reminderReconciliationTask: Task<Void, Never>?
     private var reminderChangeSyncPending = false
+    private var reminderAccessGranted = false
+    private var isCheckingReminderChanges = false
     private var lastRenderedItems: [ReminderItem]?
     private var lastRenderProfile: String?
     private var lastRenderedEmptyState: ReminderEmptyState?
 
     /// 上一次渲染画面所在的日期；跨过午夜后页头日期和「今天 / 明天」标签都要重绘。
     private var lastRenderedDay: Date?
+    private var lastRenderedCalendarState: String?
 
     private var cachedZectrixItems: [ReminderItem] = []
     private var cachedZectrixView: DeviceReminderView = .today
     private var cachedZectrixRevision: UInt64 = 0
+    private var cachedCalendarIdentifier: String?
     private var lastAlertSignatures: [String] = []
     private var isServingDisplayRequest = false
 
     /// 设备轮询的单飞标志，在第一次 await 之前置位。
     private var isPollingDevice = false
-
-    /// 阻止 App Nap 节流计时器：设备按键出画面依赖每秒一次的轮询。
-    private var pollingActivity: NSObjectProtocol?
+    private var weatherUpdateInProgress = false
+    private var lastWeatherLocationKey: String?
+    private var lastWeatherAttemptAt: Date?
+    private var lastWeatherSuccessAt: Date?
 
     init(
         previewReminders: [ReminderItem] = [],
@@ -100,10 +82,6 @@ final class AppModel: ObservableObject {
         reminderStore = ReminderStore(identities: identities)
         deviceURL = defaults.string(forKey: Keys.deviceURL) ?? ""
         selectedCalendarId = defaults.string(forKey: Keys.calendarId)
-        automaticSync = defaults.object(forKey: Keys.automaticSync) as? Bool ?? true
-        automaticSyncInterval = AutomaticSyncInterval(
-            rawValue: defaults.integer(forKey: Keys.automaticSyncInterval)
-        ) ?? .thirtySeconds
         reminders = previewReminders
         activeViewTotalCount = previewReminders.count
         deferredOperations = defaults.data(forKey: Keys.deferredOperations)
@@ -126,60 +104,74 @@ final class AppModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard self?.automaticSync == true else { return }
-                await self?.sync()
+                guard self?.activeView != .notes else { return }
+                await self?.sync(force: true)
             }
         }
-
-        // 窗口关闭或应用在后台时，App Nap 会节流计时器，设备按键要等很久才出画面；
-        // 仍允许系统空闲睡眠。
-        pollingActivity = ProcessInfo.processInfo.beginActivity(
-            options: .userInitiatedAllowingIdleSystemSleep,
-            reason: "轮询 NOTE4 的按键与同步请求"
-        )
-
-        configureAutomaticSyncTimer()
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.scheduleReminderChangeSync() }
+        }
+        reminderReconciliationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 5_000_000_000) }
+                catch { return }
+                await self?.checkForMissedReminderChanges()
+            }
+        }
+        wakeListener = DeviceWakeListener { [weak self] in
+            Task { @MainActor in await self?.pollForDeviceSyncRequest() }
+        }
+        wakeListener?.start()
     }
 
     deinit {
         if let changeObserver { NotificationCenter.default.removeObserver(changeObserver) }
         if let dayChangeObserver { NotificationCenter.default.removeObserver(dayChangeObserver) }
-        if let pollingActivity { ProcessInfo.processInfo.endActivity(pollingActivity) }
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
         reminderChangeSyncTask?.cancel()
-        timer?.invalidate()
-        deviceRequestTimer?.invalidate()
+        reminderReconciliationTask?.cancel()
+        wakeListener?.stop()
     }
 
-    private func configureAutomaticSyncTimer() {
-        timer?.invalidate()
-        deviceRequestTimer?.invalidate()
-        timer = nil
-        deviceRequestTimer = nil
-        if automaticSync {
-            timer = Timer.scheduledTimer(
-                withTimeInterval: TimeInterval(automaticSyncInterval.rawValue),
-                repeats: true
-            ) { [weak self] _ in
-                Task { @MainActor in
-                    guard self?.automaticSync == true else { return }
-                    await self?.sync()
-                }
+    private func checkForMissedReminderChanges() async {
+        // iCloud edits do not always reach this process as an EventKit
+        // notification. Check the local EventKit data, not the NOTE4 network,
+        // and only start a device sync when something relevant changed.
+        guard reminderAccessGranted, !isCheckingReminderChanges,
+              !isSyncing, !isServingDisplayRequest, !reminderChangeSyncPending,
+              activeView != .notes, normalizedURL != nil,
+              selectedCalendarId != nil else { return }
+        isCheckingReminderChanges = true
+        defer { isCheckingReminderChanges = false }
+        do {
+            let snapshot = try await reminderStore.fetchView(
+                activeView, calendarIdentifier: selectedCalendarId,
+                includeAlertCandidates: true
+            )
+            guard !isSyncing, !reminderChangeSyncPending else { return }
+            if Self.hasMissedReminderChanges(
+                snapshot, renderedItems: lastRenderedItems,
+                renderedCount: activeViewTotalCount,
+                renderedEmptyState: lastRenderedEmptyState,
+                alertSignatures: lastAlertSignatures,
+                now: Date()
+            ) {
+                scheduleReminderChangeSync()
             }
-        } else {
-            reminderChangeSyncTask?.cancel()
-            reminderChangeSyncTask = nil
-            reminderChangeSyncPending = false
-        }
-        // A one-second device poll is still effectively immediate for button
-        // interactions, while cutting idle Wi-Fi traffic to one quarter of the
-        // previous rate so NOTE4 can spend time in modem sleep.
-        deviceRequestTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.pollForDeviceSyncRequest() }
+        } catch {
+            // The normal synchronization path reports EventKit errors; this
+            // local fallback must not replace a useful device status message.
         }
     }
 
     private func scheduleReminderChangeSync() {
-        guard automaticSync else { return }
+        // Notes are read only on demand. A Reminders database notification
+        // never causes a Notes query or redraw while the device is reading.
+        guard activeView != .notes else { return }
         reminderChangeSyncPending = true
         reminderChangeSyncTask?.cancel()
         reminderChangeSyncTask = Task { [weak self] in
@@ -196,7 +188,7 @@ final class AppModel: ObservableObject {
     }
 
     private func flushReminderChangeSync() async {
-        while automaticSync, reminderChangeSyncPending, !Task.isCancelled {
+        while reminderChangeSyncPending, !Task.isCancelled {
             // Never drop a change that arrives while another device request or
             // synchronization is active. Wait briefly, then run a fresh fetch.
             if isSyncing || isServingDisplayRequest {
@@ -234,7 +226,23 @@ final class AppModel: ObservableObject {
             // 等待状态期间可能已经开始同步：放弃本轮，避免在新快照之后上传按旧列表渲染的画面。
             guard !isSyncing else { return }
 
+            if defaults.string(forKey: Keys.deviceId) == deviceStatus.deviceId {
+                Task { [weak self] in
+                    await self?.updateWeatherIfNeeded(client: client, status: deviceStatus)
+                }
+            }
+
+            if deviceStatus.view == .notes {
+                if deviceStatus.displayRequested == true ||
+                    deviceStatus.noteOpenRequested == true ||
+                    deviceStatus.syncRequested == true {
+                    await sync(force: true)
+                }
+                return
+            }
+
             if deviceStatus.displayRequested == true,
+               deviceStatus.syncRequested != true,
                deviceStatus.view == cachedZectrixView,
                deviceStatus.revision == cachedZectrixRevision,
                !cachedZectrixItems.isEmpty {
@@ -250,15 +258,86 @@ final class AppModel: ObservableObject {
                 return
             }
 
+            // Moving the calendar cursor only changes the bitmap. Reuse the
+            // most recent complete reminder list instead of fetching EventKit
+            // and uploading a new snapshot for every button press.
+            if deviceStatus.syncRequested == true,
+               deviceStatus.view == .calendar,
+               deviceStatus.operationCount == 0,
+               deviceStatus.revision != 0,
+               deviceStatus.revision == cachedZectrixRevision,
+               cachedZectrixView == .calendar,
+               cachedCalendarIdentifier == selectedCalendarId,
+               lastRenderedItems != nil,
+               lastRenderedDay == Calendar.current.startOfDay(for: Date()),
+               !reminderChangeSyncPending,
+               let calendarState = Self.calendarState(deviceStatus),
+               calendarState != lastRenderedCalendarState {
+                isServingDisplayRequest = true
+                defer { isServingDisplayRequest = false }
+                let frame = try ZectrixDisplayRenderer.renderCalendar(
+                    cachedZectrixItems,
+                    monthOffset: deviceStatus.calendarMonthOffset ?? 0,
+                    selectedDay: deviceStatus.calendarSelectedDay ?? 1,
+                    selectingDay: deviceStatus.calendarSelectingDay == true,
+                    dayDetail: deviceStatus.calendarDayDetail == true,
+                    detailPage: deviceStatus.calendarDetailPage ?? 0
+                )
+                guard normalizedURL == baseURL else { return }
+                try await client.send(display: frame, index: 0, state: .idle)
+                try await client.acknowledgeSyncRequest(id: deviceStatus.syncRequestId)
+                lastRenderedCalendarState = calendarState
+                statusText = "日历已切换 · \(Self.clock.string(from: Date()))"
+                return
+            }
+
             // 设备上的完成、切换视图和「立即同步」都是用户的明确操作，不受「自动同步」开关限制；
             // 开关只控制定时同步和提醒事项变化触发的同步。
-            if deviceStatus.syncRequested == true,
-               deviceStatus.syncRequestAgeMs.map({ $0 >= 5_000 }) ?? true {
-                await sync()
+            if deviceStatus.syncRequested == true {
+                // Batch very rapid confirmations, but keep the visible final
+                // removal inside the requested 1–2 second window.
+                let remaining = max(0, 900 - (deviceStatus.syncRequestAgeMs ?? 900))
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining) * 1_000_000)
+                }
+                await sync(force: true)
             }
         } catch {
             // The full scheduled/manual sync remains responsible for showing
             // connection errors; silent polling must not overwrite UI status.
+        }
+    }
+
+    private func updateWeatherIfNeeded(client: DeviceClient, status: DeviceStatus) async {
+        guard !weatherUpdateInProgress,
+              let city = status.weatherCity, !city.isEmpty,
+              let latitude = status.weatherLatitude,
+              let longitude = status.weatherLongitude,
+              let version = status.weatherLocationVersion,
+              (-90...90).contains(latitude), (-180...180).contains(longitude) else { return }
+        let key = "\(status.deviceId)|\(version)|\(city)|\(latitude)|\(longitude)"
+        let now = Date()
+        if key == lastWeatherLocationKey {
+            if let success = lastWeatherSuccessAt, now.timeIntervalSince(success) < 15 * 60 { return }
+            if let attempt = lastWeatherAttemptAt, now.timeIntervalSince(attempt) < 5 * 60 { return }
+        } else {
+            lastWeatherLocationKey = key
+            lastWeatherSuccessAt = nil
+        }
+        weatherUpdateInProgress = true
+        lastWeatherAttemptAt = now
+        defer { weatherUpdateInProgress = false }
+        do {
+            let temperature = try await WeatherService().currentCelsius(
+                latitude: latitude, longitude: longitude)
+            guard normalizedURL == client.baseURL else { return }
+            let patch = try ZectrixDisplayRenderer.renderWeatherPatch(
+                city: city, celsius: temperature)
+            try await client.sendWeatherPatch(patch, locationVersion: version)
+            lastWeatherSuccessAt = Date()
+        } catch {
+            // Keep the device's last successful temperature on transient
+            // Internet outages. The next attempt starts in five minutes.
         }
     }
 
@@ -273,6 +352,7 @@ final class AppModel: ObservableObject {
                 ))
                 return
             }
+            reminderAccessGranted = true
             calendars = reminderStore.calendars.map { ($0.calendarIdentifier, $0.title) }
 
             // 保存的列表可能已被删除：和未选择一样改选第一个列表，不能带着失效的标识去同步。
@@ -298,21 +378,6 @@ final class AppModel: ObservableObject {
             return
         }
 
-        // 所选列表不可用时本轮同步无法完成、设备操作不会被确认：先停下，
-        // 否则设备持续请求同步时，同一批操作会被反复写回 Apple 提醒事项。
-        let hasSelectedList = reminderStore.calendars.contains {
-            $0.calendarIdentifier == selectedCalendarId
-        }
-        guard hasSelectedList else {
-            setSyncFailure(SyncFailure(
-                title: "没有可同步的提醒事项列表",
-                reason: "之前选择的列表可能已被删除，或者尚未选择列表。",
-                suggestion: "在 Mac App 的“提醒事项列表”中重新选择一个列表。",
-                technicalDetail: nil
-            ))
-            return
-        }
-
         isSyncing = true
         syncFailure = nil
         defer { isSyncing = false }
@@ -324,12 +389,6 @@ final class AppModel: ObservableObject {
             // 等待状态期间设备地址可能被修改：读到的是旧地址上的设备，放弃本轮，也不能据此记录配对。
             guard normalizedURL == baseURL else { return }
 
-            if !force,
-               deviceStatus.syncRequested == true,
-               let age = deviceStatus.syncRequestAgeMs,
-               age < 5_000 {
-                return
-            }
             displayWidth = deviceStatus.width
             displayHeight = deviceStatus.height
             guard deviceStatus.width == ZectrixDisplayRenderer.width,
@@ -355,8 +414,30 @@ final class AppModel: ObservableObject {
                 return
             }
 
+            Task { [weak self] in
+                await self?.updateWeatherIfNeeded(client: client, status: deviceStatus)
+            }
+
             activeView = deviceStatus.view ?? .today
             let renderProfile = "zectrix-note4-\(deviceStatus.firmwareVersion ?? "unknown")-\(activeView.rawValue)"
+
+            if activeView == .notes {
+                try await syncNotes(client: client, status: deviceStatus, renderProfile: renderProfile)
+                return
+            }
+
+            // Notes does not require a Reminders list. All reminder views do.
+            guard reminderStore.calendars.contains(where: {
+                $0.calendarIdentifier == selectedCalendarId
+            }) else {
+                setSyncFailure(SyncFailure(
+                    title: "没有可同步的提醒事项列表",
+                    reason: "之前选择的列表可能已被删除，或者尚未选择列表。",
+                    suggestion: "在 Mac App 的“提醒事项列表”中重新选择一个列表。",
+                    technicalDetail: nil
+                ))
+                return
+            }
 
             // 先重试之前暂存的写回操作。失败项继续留在 Mac，不阻塞当前设备队列与画面同步。
             retryDeferredOperations()
@@ -385,10 +466,12 @@ final class AppModel: ObservableObject {
 
             // 页头日期、「今天 / 明天」标签和时段分组都在渲染时写死，跨天后即使事项不变也要重绘。
             let renderDay = Calendar.current.startOfDay(for: Date())
+            let calendarState = Self.calendarState(deviceStatus)
             let needsRefresh = lastRenderedItems != reminders ||
                 lastRenderProfile != renderProfile ||
                 lastRenderedEmptyState != emptyState ||
                 lastRenderedDay != renderDay ||
+                lastRenderedCalendarState != calendarState ||
                 Self.requiresFrameRebuild(deviceRevision: deviceStatus.revision)
             let revision = UInt64(Date().timeIntervalSince1970 * 1_000)
             let now = Date()
@@ -401,7 +484,10 @@ final class AppModel: ObservableObject {
                     DeviceAlert(
                         syncId: item.syncId, appleId: item.appleId,
                         dueAtEpochMs: Int64(item.dueAt!.timeIntervalSince1970 * 1_000),
-                        bitmap: try ZectrixDisplayRenderer.renderAlertPatch(title: item.title).base64EncodedString()
+                        bitmap: try ZectrixDisplayRenderer.renderAlertPatch(title: item.title).base64EncodedString(),
+                        standbyTitleBitmap: try ZectrixDisplayRenderer.renderStandbyTitlePatch(item.title).base64EncodedString(),
+                        standbyDueBitmap: try ZectrixDisplayRenderer.renderStandbyDuePatch(item.dueAt!).base64EncodedString(),
+                        photoReminderBitmap: try ZectrixDisplayRenderer.renderPhotoReminderPatch(item.title).base64EncodedString()
                     )
                 }
                 try await client.send(snapshot: DeviceSnapshot(
@@ -418,24 +504,44 @@ final class AppModel: ObservableObject {
                     currentViewCount: viewSnapshot.items.count,
                     replaceDisplay: needsRefresh,
                     sentAtEpochMs: Int64(Date().timeIntervalSince1970 * 1_000),
+                    timeZoneOffsetMinutes: TimeZone.current.secondsFromGMT() / 60,
+                    todayDay: Calendar.current.component(.day, from: Date()),
+                    todayMonth: Calendar.current.component(.month, from: Date()),
+                    todayYear: Calendar.current.component(.year, from: Date()),
+                    calendarDateKeys: Array(Set(viewSnapshot.alertCandidates.compactMap { item in
+                        guard let dueAt = item.dueAt else { return nil as Int? }
+                        let parts = Calendar.current.dateComponents([.year, .month, .day], from: dueAt)
+                        guard let year = parts.year, let month = parts.month, let day = parts.day else { return nil }
+                        return year * 10_000 + month * 100 + day
+                    })).sorted().prefix(256).map { $0 },
                     alerts: alerts
                 ))
                 cachedZectrixItems = reminders
                 cachedZectrixView = activeView
                 cachedZectrixRevision = revision
+                cachedCalendarIdentifier = selectedCalendarId
                 lastAlertSignatures = alertSignatures
             }
             if needsRefresh {
-                let selectableCount = activeView == .completed
+                let selectableCount = activeView == .calendar ? 0 : activeView == .completed
                     ? reminders.count
                     : reminders.lazy.filter { !$0.completed }.count
                 try await client.send(
-                    display: try ZectrixDisplayRenderer.render(
-                        reminders,
-                        selectedIndex: nil,
-                        view: activeView,
-                        emptyState: emptyState
-                    ),
+                    display: try activeView == .calendar
+                        ? ZectrixDisplayRenderer.renderCalendar(
+                            reminders,
+                            monthOffset: deviceStatus.calendarMonthOffset ?? 0,
+                            selectedDay: deviceStatus.calendarSelectedDay ?? 1,
+                            selectingDay: deviceStatus.calendarSelectingDay == true,
+                            dayDetail: deviceStatus.calendarDayDetail == true,
+                            detailPage: deviceStatus.calendarDetailPage ?? 0
+                        )
+                        : ZectrixDisplayRenderer.render(
+                            reminders,
+                            selectedIndex: nil,
+                            view: activeView,
+                            emptyState: emptyState
+                        ),
                     index: 0,
                     state: .idle
                 )
@@ -451,6 +557,7 @@ final class AppModel: ObservableObject {
                 lastRenderProfile = renderProfile
                 lastRenderedEmptyState = emptyState
                 lastRenderedDay = renderDay
+                lastRenderedCalendarState = calendarState
             }
 
             // 每条操作都已写回、确认提醒不存在或安全暂存到 Mac 重试队列后，
@@ -468,6 +575,72 @@ final class AppModel: ObservableObject {
         } catch {
             reportSyncFailure(error, address: baseURL)
         }
+    }
+
+    private func syncNotes(
+        client: DeviceClient,
+        status: DeviceStatus,
+        renderProfile: String
+    ) async throws {
+        // Entering Notes is the only path that lists notes. Opening a note is
+        // the only path that asks Notes for its body and attachments.
+        if notes.isEmpty || status.syncRequested == true {
+            notes = try notesStore.fetchSummaries()
+        }
+        reminders = []
+        activeViewTotalCount = notes.count
+        emptyState = .noItems
+        let revision = UInt64(Date().timeIntervalSince1970 * 1_000)
+
+        try await client.send(snapshot: DeviceSnapshot(
+            revision: revision, view: .notes,
+            reminders: notes.map { DeviceSnapshotItem(syncId: $0.id, appleId: nil, completed: false) },
+            viewCounts: nil, currentViewCount: notes.count,
+            replaceDisplay: status.syncRequested == true || status.revision == 0,
+            sentAtEpochMs: Int64(Date().timeIntervalSince1970 * 1_000),
+            timeZoneOffsetMinutes: TimeZone.current.secondsFromGMT() / 60,
+            todayDay: Calendar.current.component(.day, from: Date()),
+            todayMonth: Calendar.current.component(.month, from: Date()),
+            todayYear: Calendar.current.component(.year, from: Date()),
+            calendarDateKeys: nil, alerts: nil
+        ))
+
+        let index = min(max(status.selectedIndex ?? 0, 0), max(0, notes.count - 1))
+        // noteDetail is persistent device state; noteOpenRequested is only a
+        // one-shot request. Treating the latter as the whole state caused any
+        // later display refresh to upload the directory over an open note.
+        let wantsDetail = status.noteDetail == true || status.noteOpenRequested == true
+        if wantsDetail, notes.indices.contains(index) {
+            let selectedSummary = notes[index]
+            if status.noteOpenRequested == true || openedNote == nil {
+                if openedNote?.summary.id != selectedSummary.id {
+                    openedNote = try notesStore.fetchDocument(selectedSummary)
+                }
+            }
+            if let document = openedNote {
+                let page = min(max(status.notePage ?? 0, 0), ZectrixDisplayRenderer.notePageCount(document) - 1)
+                openedNotePage = page
+                try await client.sendNoteDetail(
+                    display: try ZectrixDisplayRenderer.renderNoteDetail(document, page: page),
+                    page: page,
+                    pageCount: ZectrixDisplayRenderer.notePageCount(document)
+                )
+            }
+        } else {
+            let selected = status.displayRequested == true && !notes.isEmpty ? index : nil
+            try await client.send(
+                display: try ZectrixDisplayRenderer.renderNotesList(notes, selectedIndex: selected),
+                index: index,
+                state: selected == nil ? .idle : .normal
+            )
+        }
+
+        if status.syncRequested == true {
+            try await client.acknowledgeSyncRequest(id: status.syncRequestId)
+        }
+        lastRenderProfile = renderProfile
+        statusText = "已按需读取备忘录 \(notes.count) 项 · \(Self.clock.string(from: Date()))"
+        syncFailure = nil
     }
 
     private func setSyncFailure(_ failure: SyncFailure) {
@@ -514,14 +687,14 @@ final class AppModel: ObservableObject {
                 setSyncFailure(SyncFailure(
                     title: "同步数据格式不兼容",
                     reason: "NOTE4 拒绝了 \(endpoint) 的数据。Mac App 与固件版本可能不一致。",
-                    suggestion: "同时升级到 v1.0.1 的 Mac App 和 NOTE4 固件后重试。",
+                    suggestion: "同时升级到 v1.1 的 Mac App 和 NOTE4 固件后重试。",
                     technicalDetail: responseDetail
                 ))
             case 403:
                 setSyncFailure(SyncFailure(
                     title: "设备拒绝写入",
                     reason: "NOTE4 的安全校验拒绝了 \(endpoint) 请求。通常是 Mac App 与固件版本不配套，或设备地址使用了域名。",
-                    suggestion: "升级两端到 v1.0.1，并在设备地址中直接填写 NOTE4 的数字 IP。",
+                    suggestion: "升级两端到 v1.1，并在设备地址中直接填写 NOTE4 的数字 IP。",
                     technicalDetail: responseDetail
                 ))
             case 409:
@@ -535,7 +708,7 @@ final class AppModel: ObservableObject {
                 setSyncFailure(SyncFailure(
                     title: "NOTE4 存储画面失败",
                     reason: "设备没有足够的可用缓存空间，或 Flash 文件写入失败。",
-                    suggestion: "在 NOTE4 设置中执行“清除缓存”并重启；仍失败时重新刷入 v1.0.1 固件。",
+                    suggestion: "在 NOTE4 设置中执行“清除缓存”并重启；仍失败时重新刷入 v1.1 固件。",
                     technicalDetail: "\(endpoint) · \(responseDetail)"
                 ))
             default:
@@ -553,7 +726,7 @@ final class AppModel: ObservableObject {
             setSyncFailure(SyncFailure(
                 title: "无法识别设备响应",
                 reason: "NOTE4 返回的数据与当前 Mac App 的同步协议不一致。",
-                suggestion: "请同时升级 Mac App 与 NOTE4 固件到 v1.0.1。",
+                suggestion: "请同时升级 Mac App 与 NOTE4 固件到 v1.1。",
                 technicalDetail: error.localizedDescription
             ))
             return
@@ -643,9 +816,6 @@ final class AppModel: ObservableObject {
         for operation in operations {
             do {
                 try reminderStore.apply(operation)
-            } catch ReminderStore.StoreError.reminderNotFound {
-                // 提醒已在其他设备上删除或标识已失效，没有可写回的对象，视为已处理。
-                continue
             } catch {
                 // 权限、iCloud、只读列表等错误都先保留操作。即使看起来不可恢复，
                 // 用户也可能稍后修改权限或列表状态；不能在这里直接丢弃完成请求。
@@ -680,8 +850,6 @@ final class AppModel: ObservableObject {
         for var item in deferredOperations {
             do {
                 try reminderStore.apply(item.operation)
-            } catch ReminderStore.StoreError.reminderNotFound {
-                continue
             } catch {
                 item.message = error.localizedDescription
                 item.attempts += 1
@@ -742,11 +910,33 @@ final class AppModel: ObservableObject {
             .prefix(32).map { $0 }
     }
 
+    static func hasMissedReminderChanges(
+        _ snapshot: ReminderViewSnapshot,
+        renderedItems: [ReminderItem]?,
+        renderedCount: Int,
+        renderedEmptyState: ReminderEmptyState?,
+        alertSignatures: [String],
+        now: Date
+    ) -> Bool {
+        let signatures = pendingAlerts(from: snapshot.alertCandidates, now: now).map {
+            "\($0.syncId)|\(Int64(($0.dueAt?.timeIntervalSince1970 ?? 0) * 1_000))|\($0.title)"
+        }
+        return snapshot.items != renderedItems ||
+            snapshot.totalCount != renderedCount ||
+            snapshot.emptyState != renderedEmptyState ||
+            signatures != alertSignatures
+    }
+
     static func requiresFrameRebuild(deviceRevision: UInt64) -> Bool {
         // The NOTE4 marks its revision as zero after a local cache clear or
         // when its idle frame is missing. Re-upload the image even if EventKit
         // returns exactly the same reminders as last time.
         deviceRevision == 0
+    }
+
+    private static func calendarState(_ status: DeviceStatus) -> String? {
+        guard status.view == .calendar else { return nil }
+        return "\(status.calendarMonthOffset ?? 0)|\(status.calendarSelectedDay ?? 1)|\(status.calendarSelectingDay == true)|\(status.calendarDayDetail == true)|\(status.calendarDetailPage ?? 0)"
     }
 
     static func itemsMarkingCompleted(
@@ -787,8 +977,6 @@ final class AppModel: ObservableObject {
     private enum Keys {
         static let deviceURL = "deviceURL"
         static let calendarId = "calendarId"
-        static let automaticSync = "automaticSync"
-        static let automaticSyncInterval = "automaticSyncInterval"
         static let deviceId = "deviceId"
         static let deferredOperations = "deferredOperations.v1"
     }

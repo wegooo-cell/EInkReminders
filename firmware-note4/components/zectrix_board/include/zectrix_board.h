@@ -71,7 +71,9 @@ private:
     };
 
     static void ButtonTaskEntry(void* arg);
+    static void ButtonIsrEntry(void* arg);
     void ButtonTask();
+    esp_err_t InitButtonWakeup();
     esp_err_t InitPowerAndGpio();
     esp_err_t InitI2c();
     void InitBatteryAdc();

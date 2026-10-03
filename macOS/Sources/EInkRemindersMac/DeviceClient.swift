@@ -31,6 +31,17 @@ struct DeviceClient: Sendable {
         try await postJSON(snapshot, path: "api/snapshot")
     }
 
+    func sendWeatherPatch(_ patch: Data, locationVersion: UInt32) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/standby/weather"))
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "X-EInk-Reminders")
+        request.setValue(String(locationVersion), forHTTPHeaderField: "X-Weather-Location-Version")
+        request.timeoutInterval = 20
+        let (data, response) = try await session.upload(for: request, from: patch)
+        try validate(response, data: data, endpoint: "/api/standby/weather")
+    }
+
     func send(
         display: Data,
         index: Int,
@@ -52,6 +63,23 @@ struct DeviceClient: Sendable {
         request.timeoutInterval = 20
         let (data, response) = try await session.upload(for: request, from: display)
         try validate(response, data: data, endpoint: "/api/display?index=\(index)&state=\(state.rawValue)")
+    }
+
+    func sendNoteDetail(display: Data, page: Int, pageCount: Int) async throws {
+        var components = URLComponents(url: baseURL.appendingPathComponent("api/display"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "index", value: "0"),
+            URLQueryItem(name: "state", value: "note"),
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "pages", value: String(pageCount))
+        ]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("1", forHTTPHeaderField: "X-EInk-Reminders")
+        request.timeoutInterval = 20
+        let (data, response) = try await session.upload(for: request, from: display)
+        try validate(response, data: data, endpoint: "/api/display?state=note")
     }
 
     func acknowledge(through sequence: UInt64) async throws {

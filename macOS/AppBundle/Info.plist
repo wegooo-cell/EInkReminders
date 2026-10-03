@@ -9,13 +9,14 @@
     <key>CFBundleDisplayName</key><string>墨水屏提醒事项</string>
     <key>CFBundleName</key><string>墨水屏提醒事项</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.1</string>
-    <key>CFBundleVersion</key><string>101</string>
+    <key>CFBundleShortVersionString</key><string>1.1.0</string>
+    <key>CFBundleVersion</key><string>110</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSRemindersFullAccessUsageDescription</key><string>用于将选中的 Apple 提醒事项列表与本地墨水屏双向同步。</string>
     <key>NSRemindersUsageDescription</key><string>用于将选中的 Apple 提醒事项列表与本地墨水屏双向同步。</string>
     <key>NSLocalNetworkUsageDescription</key><string>用于在局域网中发现并同步墨水屏设备。</string>
+    <key>NSAppleEventsUsageDescription</key><string>仅在墨水屏进入备忘录视图时，以只读方式读取最近 15 天的标题；选中后读取正文。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key><true/>

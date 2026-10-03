@@ -5,7 +5,7 @@
   <p>
     <a href="https://wegooo-cell.github.io/EInkReminders/"><strong>浏览器刷机</strong></a>
     ·
-    <a href="https://github.com/wegooo-cell/EInkReminders/releases/tag/v1.0.1"><strong>下载 v1.0.1</strong></a>
+    <a href="https://github.com/wegooo-cell/EInkReminders/releases/tag/v1.1"><strong>下载 v1.1</strong></a>
     ·
     <a href="docs/user-manual.md"><strong>中文说明书</strong></a>
   </p>
@@ -13,7 +13,7 @@
     <img alt="ZECTRIX NOTE4" src="https://img.shields.io/badge/设备-ZECTRIX_NOTE4-111111">
     <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-111111">
     <img alt="ESP-IDF 5.4+" src="https://img.shields.io/badge/ESP--IDF-5.4%2B-111111">
-    <img alt="Release v1.0.1" src="https://img.shields.io/badge/Release-v1.0.1-0071e3">
+    <img alt="Release v1.1" src="https://img.shields.io/badge/Release-v1.1-0071e3">
   </p>
 </div>
 
@@ -75,7 +75,7 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
     <td width="50%">
       <img src="web-flasher-note4/dist/previews/preview-view-picker.png" alt="NOTE4 四视图选择页面">
       <br><strong>切换视图</strong><br>
-      长按上键进入设置，在今天、计划、全部、完成之间切换。
+      长按上键进入设置，选择提醒事项、备忘录、待机显示或日历。
     </td>
   </tr>
 </table>
@@ -85,11 +85,14 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 | 功能 | 行为 |
 | --- | --- |
 | Apple 生态双向同步 | iPhone 与 Mac 的修改显示到 NOTE4；NOTE4 的完成操作写回 Apple 提醒事项 |
-| 四种智能视图 | 今天、计划、全部、完成，数据逻辑跟随 macOS 提醒事项 |
+| 提醒事项视图 | 今天、全部、计划、完成；另有只读备忘录、月历与三种待机显示 |
 | 硬件按键操作 | 上键选择上一项，下键选择下一项，OK 完成，长按上键进入设置 |
 | 本地即时反馈 | 按 OK 后立即显示实心圆和删除线，不需要等待 Mac 返回 |
 | 连续完成多项 | 每次操作分别写入设备队列，可以连续完成第二项、第三项 |
-| 到点提醒 | 屏幕中央显示提醒卡片；选择完成，或延后 5 分钟 |
+| 到点提醒与延后 | 屏幕中央显示提醒卡片；可完成或延后 5、10、15、30、60 分钟，并将新时间写回 Apple 提醒事项 |
+| 月历 | 按天移动，跨月自动衔接；长按 OK 回到今天，按 OK 查看当天完整事项 |
+| 待机显示 | 两种黑底时钟和照片天气页；切换时全刷，清除残影 |
+| 只读备忘录 | 按需读取最近的标题与摘要，打开时才读取正文，不同步附件 |
 | 中文扫码配网 | 首次启动显示 Wi-Fi 二维码；iPhone 扫码后从附近 Wi-Fi 列表选择网络 |
 | 手机控制页面 | 在同一局域网访问 NOTE4 IP，可切换视图、同步、刷新和管理网络 |
 | 局部刷新 | 选择移动等小范围变化局部刷新，累计 8 次后自动全刷清理残影 |
@@ -104,7 +107,7 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 - **全部**：显示所选列表中的全部未完成事项，不设应用层项目上限。
 - **完成**：显示已完成事项，最近完成的内容排在前面。
 
-今天、计划和完成视图最多同步并浏览 20 项；全部视图同步当前列表里的全部未完成事项。
+今天和完成视图最多同步并浏览 20 项；计划、全部和日历读取当前列表的全部未完成事项。
 跨过当前可见窗口时，Mac 会按需为 NOTE4 生成下一幅画面。
 
 ### 完成事项的反馈
@@ -118,7 +121,24 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 如果事项是在 Mac 或 iPhone 上完成，NOTE4 会在下一次同步时直接移除，不额外显示本地确认动画。
 
 列表中的上下选择和 OK 完成依赖 Mac 在线生成画面。Mac 不在线时，NOTE4 会提示“等待 Mac 连接”；
-到点提醒的“完成”与“延后 5 分钟”可以离线操作，操作保存在 Flash 中，Mac 恢复后再写回。
+到点提醒的“完成”与延后操作可以离线进行，操作保存在 Flash 中，Mac 恢复后再写回。
+
+### 照片与天气待机页
+
+在“切换视图 → 待机显示”中按下键，可依次切换大时钟、竖版时钟和照片天气页。
+手机与 NOTE4 连接同一局域网后，打开设备 IP（例如 `http://192.168.1.42`），
+在“第三款待机显示”中搜索并选择城市，或选择照片并上传。手机会先把照片裁切、
+转换为 184×216 的黑白点阵；设备只接收约 5 KB 的点阵数据，不接收原图。
+未上传时使用本项目随附的默认图；自定义照片和城市设置在设备重启后保留。
+
+Mac App 优先查询 [Open-Meteo](https://open-meteo.com/en/docs) 的当前 2 米气温；
+如果该服务不可用，改查 [MET Norway Locationforecast](https://api.met.no/doc/locationforecast/HowTO)
+的最近一小时气温预报。约每 15 分钟更新一次，再把城市和温度的 1-bit 字图发给 NOTE4。
+两个来源都不可用时，设备保留上次成功的天气字图并在 5 分钟后重试；
+刚修改城市而尚未取得新天气时显示占位符，不会拿旧城市的气温冒充新城市。
+备用气温数据由挪威气象研究所（MET Norway）提供，按
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 署名，经过温度取整与黑白点阵转换。
+Open-Meteo 公共服务的免费许可限非商业用途，商业发布前应核对其许可和额度。
 
 ## 快速安装
 
@@ -146,9 +166,9 @@ Mac App 通过系统 EventKit 权限读取用户选中的提醒事项列表。Ap
 
 | 下载内容 | 地址 |
 | --- | --- |
-| macOS App v1.0.1 | [EInkReminders-macOS-v1.0.1.zip](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/EInkReminders-macOS-v1.0.1.zip) |
-| NOTE4 完整固件 v1.0.1 | [eink-reminders-note4-v1.0.1.bin](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/eink-reminders-note4-v1.0.1.bin) |
-| SHA-256 校验文件 | [SHA256SUMS-v1.0.1.txt](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.0.1/SHA256SUMS-v1.0.1.txt) |
+| macOS App v1.1 | [EInkReminders-macOS-v1.1.zip](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.1/EInkReminders-macOS-v1.1.zip) |
+| NOTE4 完整固件 v1.1 | [eink-reminders-note4-v1.1.bin](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.1/eink-reminders-note4-v1.1.bin) |
+| SHA-256 校验文件 | [SHA256SUMS-v1.1.txt](https://github.com/wegooo-cell/EInkReminders/releases/download/v1.1/SHA256SUMS-v1.1.txt) |
 
 Mac App 要求 macOS 13 或更高版本。首次打开：
 
@@ -201,6 +221,7 @@ NOTE4 只有在没有保存 Wi-Fi，或在设备设置或手机控制页中选�
 - [完整中文说明书](docs/user-manual.md)
 - [NOTE4 固件说明](docs/zectrix-note4.md)
 - [局域网同步协议](docs/protocol.md)
+- [v1.1 发布说明](RELEASE_NOTES_v1.1.md)
 - [v1.0.1 发布说明](RELEASE_NOTES_v1.0.1.md)
 - [v1.0.0 发布说明](RELEASE_NOTES_v1.0.0.md)
 - [浏览器刷机页](https://wegooo-cell.github.io/EInkReminders/)

@@ -16,25 +16,30 @@ struct ReminderItem: Codable, Identifiable, Equatable, Sendable {
 
 enum DeviceReminderView: String, Codable, CaseIterable, Sendable {
     case today
-    case scheduled
+    case notes
     case all
     case completed
+    case planned
+    case calendar
 
     var title: String {
         switch self {
         case .today: return "今天"
-        case .scheduled: return "计划"
+        case .notes: return "备忘录"
         case .all: return "全部"
         case .completed: return "完成"
+        case .planned: return "计划"
+        case .calendar: return "日历"
         }
     }
 }
 
 struct ReminderViewCounts: Codable, Equatable, Sendable {
     let today: Int
-    let scheduled: Int
+    let notes: Int
     let all: Int
     let completed: Int
+    let planned: Int?
 }
 
 struct ReminderViewSnapshot: Sendable {
@@ -80,6 +85,12 @@ struct DeviceSnapshot: Codable, Sendable {
     let currentViewCount: Int?
     let replaceDisplay: Bool?
     let sentAtEpochMs: Int64?
+    let timeZoneOffsetMinutes: Int?
+    let todayDay: Int?
+    let todayMonth: Int?
+    let todayYear: Int?
+    /// Gregorian dates with reminders, encoded as YYYYMMDD for the device calendar.
+    let calendarDateKeys: [Int]?
     let alerts: [DeviceAlert]?
 }
 
@@ -96,6 +107,11 @@ struct DeviceAlert: Codable, Sendable {
     let dueAtEpochMs: Int64
     /// 280×78, 1 bpp, MSB first; only black content pixels are overlaid.
     let bitmap: String
+    /// 112×22 native 1-bit pixel-font labels for the approved StandBy views.
+    let standbyTitleBitmap: String?
+    let standbyDueBitmap: String?
+    /// 184×22 pixel-font line for the photo/weather StandBy screen.
+    let photoReminderBitmap: String?
 }
 
 struct DeviceStatus: Codable, Sendable {
@@ -115,6 +131,46 @@ struct DeviceStatus: Codable, Sendable {
     var view: DeviceReminderView?
     var selectedIndex: Int?
     var displayRequested: Bool?
+    var noteDetail: Bool?
+    var noteOpenRequested: Bool?
+    var notePage: Int?
+    var calendarMonthOffset: Int?
+    var calendarSelectedDay: Int?
+    var calendarSelectingDay: Bool?
+    var calendarDayDetail: Bool?
+    var calendarDetailPage: Int?
+    var weatherCity: String?
+    var weatherLatitude: Double?
+    var weatherLongitude: Double?
+    var weatherLocationVersion: UInt32?
+}
+
+struct NoteSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let modifiedLabel: String
+    let modifiedText: String
+    let previewText: String
+
+    init(
+        id: String,
+        title: String,
+        modifiedLabel: String,
+        modifiedText: String = "",
+        previewText: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.modifiedLabel = modifiedLabel
+        self.modifiedText = modifiedText
+        self.previewText = previewText
+    }
+}
+
+struct NoteDocument: Equatable, Sendable {
+    let summary: NoteSummary
+    let text: String
+    let imageURLs: [URL]
 }
 
 struct DeviceOperationsResponse: Codable, Sendable {

@@ -8,7 +8,10 @@
 #include "driver/gpio.h"
 #include "es8311_audio_codec.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "esp_attr.h"
+#include "esp_intr_alloc.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
 #include "rtc_pcf8563.h"
@@ -183,6 +186,10 @@ esp_err_t ZectrixBoard::Init(bool initialize_rtc, bool initialize_nfc) {
         button_task_ = nullptr;
         return ESP_ERR_NO_MEM;
     }
+    // Keep the original polling button path on NOTE4.  GPIO wake interrupts
+    // proved unreliable on production units (all three keys could remain
+    // silent after boot), while the 20 ms polling path is deterministic for
+    // clicks and long presses.
 
     InitBatteryAdc();
     const int64_t now_ms = esp_timer_get_time() / 1000;
@@ -220,6 +227,31 @@ esp_err_t ZectrixBoard::Init(bool initialize_rtc, bool initialize_nfc) {
 
 void ZectrixBoard::ButtonTaskEntry(void* arg) {
     static_cast<ZectrixBoard*>(arg)->ButtonTask();
+}
+
+void IRAM_ATTR ZectrixBoard::ButtonIsrEntry(void* arg) {
+    auto* board = static_cast<ZectrixBoard*>(arg);
+    if (board == nullptr || board->button_task_ == nullptr) return;
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    vTaskNotifyGiveFromISR(board->button_task_, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) portYIELD_FROM_ISR();
+}
+
+esp_err_t ZectrixBoard::InitButtonWakeup() {
+    esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+
+    for (const auto& definition : kButtons) {
+        err = gpio_set_intr_type(definition.gpio, GPIO_INTR_ANYEDGE);
+        if (err != ESP_OK) return err;
+        err = gpio_isr_handler_add(definition.gpio, ButtonIsrEntry, this);
+        if (err != ESP_OK) return err;
+        // Active-low buttons can wake automatic Light-sleep on every ESP32-S3
+        // digital GPIO, including UP on GPIO39.
+        err = gpio_wakeup_enable(definition.gpio, GPIO_INTR_LOW_LEVEL);
+        if (err != ESP_OK) return err;
+    }
+    return esp_sleep_enable_gpio_wakeup();
 }
 
 void ZectrixBoard::ButtonTask() {
@@ -260,20 +292,16 @@ void ZectrixBoard::ButtonTask() {
                     }
                 } else if (!state.armed) {
                     state.armed = true;
-                } else {
-                    if (!state.long_sent && !ClickOnPress(definition.button)) {
-                        const ZectrixButtonEvent event = {
-                            definition.button, ZectrixButtonAction::kClick};
-                        xQueueSend(button_queue_, &event, 0);
-                    }
+                } else if (!state.long_sent && !ClickOnPress(definition.button)) {
+                    const ZectrixButtonEvent event = {
+                        definition.button, ZectrixButtonAction::kClick};
+                    xQueueSend(button_queue_, &event, 0);
                 }
             }
 
-            if (state.armed && state.stable_level == 0 &&
-                !state.long_sent) {
+            if (state.armed && state.stable_level == 0 && !state.long_sent) {
                 const TickType_t threshold = LongPressTicks(definition.button);
-                if (threshold != portMAX_DELAY &&
-                    now - state.pressed_at >= threshold) {
+                if (threshold != portMAX_DELAY && now - state.pressed_at >= threshold) {
                     state.long_sent = true;
                     const ZectrixButtonEvent event = {
                         definition.button, ZectrixButtonAction::kLongPress};
